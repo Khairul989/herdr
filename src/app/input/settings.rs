@@ -1,9 +1,9 @@
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 use crate::{
     app::{
-        state::{AppState, ExperimentSetting, SettingsSection, THEME_NAMES},
+        state::{all_theme_names, AppState, ExperimentSetting, SettingsSection},
         App, Mode,
     },
     config::ToastDelivery,
@@ -72,10 +72,18 @@ fn normalize_theme_name(name: &str) -> String {
 
 fn current_theme_index(theme_name: &str) -> usize {
     let normalized = normalize_theme_name(theme_name);
-    THEME_NAMES
+    all_theme_names()
         .iter()
         .position(|name| normalize_theme_name(name) == normalized)
         .unwrap_or(0)
+}
+
+/// Enter the Theme section fresh: clear any stale filter and reseed the
+/// selection to the current theme's position in the unfiltered list.
+fn enter_theme_section(state: &mut AppState) {
+    state.settings.section = SettingsSection::Theme;
+    state.settings.theme_filter.clear();
+    state.settings.list.selected = current_theme_index(&state.theme_name);
 }
 
 fn toast_delivery_index(delivery: ToastDelivery) -> usize {
@@ -96,10 +104,12 @@ fn toast_delivery_for_index(idx: usize) -> ToastDelivery {
     }
 }
 
-fn preview_selected_theme(state: &mut AppState) {
+fn preview_selected_theme(state: &mut AppState, filtered: &[&'static str]) {
     use crate::app::state::Palette;
 
-    let name = THEME_NAMES[state.settings.list.selected];
+    let Some(name) = filtered.get(state.settings.list.selected).copied() else {
+        return;
+    };
     if let Some(mut palette) = Palette::from_name(name) {
         if let Some(custom) = &state.theme_runtime.custom {
             palette = palette.with_overrides(custom);
@@ -110,6 +120,33 @@ fn preview_selected_theme(state: &mut AppState) {
         state.palette = palette;
         state.theme_name = name.to_string();
     }
+}
+
+/// Move the Theme picker selection and, if it changed, preview the new pick.
+fn move_theme_selection_prev(state: &mut AppState) {
+    let filtered = state.filtered_theme_names();
+    let previous = state.settings.list.selected;
+    state.settings.list.move_prev();
+    if state.settings.list.selected != previous {
+        preview_selected_theme(state, &filtered);
+    }
+}
+
+fn move_theme_selection_next(state: &mut AppState) {
+    let filtered = state.filtered_theme_names();
+    let previous = state.settings.list.selected;
+    state.settings.list.move_next(filtered.len());
+    if state.settings.list.selected != previous {
+        preview_selected_theme(state, &filtered);
+    }
+}
+
+/// Re-anchor the Theme picker to the top match after the filter changes,
+/// mirroring the Navigator's `select_first_navigator_match_from`.
+fn reset_theme_filter_selection(state: &mut AppState) {
+    state.settings.list.selected = 0;
+    let filtered = state.filtered_theme_names();
+    preview_selected_theme(state, &filtered);
 }
 
 fn cancel_settings(state: &mut AppState) {
@@ -152,27 +189,39 @@ fn apply_settings(state: &mut AppState) -> Option<SettingsAction> {
 pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Option<SettingsAction> {
     match state.settings.section {
         SettingsSection::Theme => match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                let previous = state.settings.list.selected;
-                state.settings.list.move_prev();
-                if state.settings.list.selected != previous {
-                    preview_selected_theme(state);
-                }
+            KeyCode::Up => move_theme_selection_prev(state),
+            KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                move_theme_selection_prev(state)
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let previous = state.settings.list.selected;
-                state.settings.list.move_next(THEME_NAMES.len());
-                if state.settings.list.selected != previous {
-                    preview_selected_theme(state);
-                }
+            KeyCode::Down => move_theme_selection_next(state),
+            KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
+                move_theme_selection_next(state)
             }
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Tab | KeyCode::Right => {
                 state.settings.section = SettingsSection::Sound;
                 state.settings.list.selected = usize::from(!state.sound_enabled());
             }
-            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::BackTab | KeyCode::Left => {
                 state.settings.section = SettingsSection::Experiments;
                 state.settings.list.selected = 0;
+            }
+            KeyCode::Backspace => {
+                state.settings.theme_filter.pop();
+                reset_theme_filter_selection(state);
+            }
+            KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+                state.settings.theme_filter.clear();
+                reset_theme_filter_selection(state);
+            }
+            KeyCode::Esc if !state.settings.theme_filter.is_empty() => {
+                state.settings.theme_filter.clear();
+                reset_theme_filter_selection(state);
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                state.settings.theme_filter.push(c);
+                reset_theme_filter_selection(state);
             }
             _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
                 Some(super::modal::ModalAction::Apply) => return apply_settings(state),
@@ -193,8 +242,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = toast_delivery_index(state.toast_delivery());
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                state.settings.section = SettingsSection::Theme;
-                state.settings.list.selected = current_theme_index(&state.theme_name);
+                enter_theme_section(state);
             }
             _ => {
                 if let Some(super::modal::ModalAction::Close) =
@@ -264,8 +312,7 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = 0;
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                state.settings.section = SettingsSection::Theme;
-                state.settings.list.selected = current_theme_index(&state.theme_name);
+                enter_theme_section(state);
             }
             _ => {
                 if let Some(super::modal::ModalAction::Close) =
@@ -306,6 +353,7 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
     state.integration_install_messages.clear();
     state.settings.original_palette = Some(state.palette.clone());
     state.settings.original_theme = Some(state.theme_name.clone());
+    state.settings.theme_filter.clear();
     state.settings.section = section;
     state.settings.list.selected = match section {
         SettingsSection::Theme => current_theme_index(&state.theme_name),
@@ -374,14 +422,20 @@ impl AppState {
 
         match self.settings.section {
             SettingsSection::Theme => {
-                let max_visible = area.height as usize;
+                let list_top = area.y + crate::ui::THEME_LIST_TOP_OFFSET;
+                if row < list_top {
+                    return None;
+                }
+                let filtered_len = self.filtered_theme_names().len();
+                let max_visible =
+                    area.height.saturating_sub(crate::ui::THEME_LIST_TOP_OFFSET) as usize;
                 let scroll = if self.settings.list.selected >= max_visible {
                     self.settings.list.selected - max_visible + 1
                 } else {
                     0
                 };
-                let idx = scroll + (row - area.y) as usize;
-                (idx < THEME_NAMES.len()).then_some(idx)
+                let idx = scroll + (row - list_top) as usize;
+                (idx < filtered_len).then_some(idx)
             }
             SettingsSection::Sound => {
                 let list_y = area.y + 3;
@@ -434,13 +488,17 @@ impl AppState {
                         SettingsSection::Experiments => 0,
                         SettingsSection::Integrations => 0,
                     });
+                    if section == SettingsSection::Theme {
+                        self.settings.theme_filter.clear();
+                    }
                     return None;
                 }
                 if let Some(idx) = self.settings_list_index_at(mouse.column, mouse.row) {
                     self.settings.list.select(idx);
                     return match self.settings.section {
                         SettingsSection::Theme => {
-                            preview_selected_theme(self);
+                            let filtered = self.filtered_theme_names();
+                            preview_selected_theme(self, &filtered);
                             None
                         }
                         SettingsSection::Sound => {
@@ -491,6 +549,59 @@ mod tests {
 
     use super::super::{app_for_mouse_test, mouse, state_with_workspaces};
     use super::*;
+
+    #[test]
+    fn theme_filter_narrows_list() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.settings.theme_filter = "drac".into();
+
+        let filtered = state.filtered_theme_names();
+
+        assert!(filtered.contains(&"dracula"));
+        assert!(filtered.contains(&"dracula-plus"));
+        assert!(!filtered.contains(&"nord"));
+    }
+
+    #[test]
+    fn empty_filter_shows_curated_first() {
+        use crate::app::state::THEME_NAMES;
+
+        let state = state_with_workspaces(&["test"]);
+        assert!(state.settings.theme_filter.is_empty());
+
+        let filtered = state.filtered_theme_names();
+
+        assert_eq!(&filtered[..THEME_NAMES.len()], THEME_NAMES);
+    }
+
+    #[test]
+    fn typing_char_appends_and_resets_selection() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings(&mut state);
+        state.settings.list.selected = 5;
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()),
+        );
+
+        assert_eq!(state.settings.theme_filter, "d");
+        assert_eq!(state.settings.list.selected, 0);
+    }
+
+    #[test]
+    fn entering_theme_section_clears_filter() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.settings.theme_filter = "stale".into();
+
+        enter_theme_section(&mut state);
+
+        assert!(state.settings.theme_filter.is_empty());
+        assert_eq!(
+            state.settings.list.selected,
+            current_theme_index(&state.theme_name)
+        );
+    }
 
     #[test]
     fn settings_cancel_restores_previewed_theme_from_other_sections() {

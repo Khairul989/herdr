@@ -12,6 +12,7 @@ mod api;
 mod api_helpers;
 mod config_io;
 mod creation;
+mod generated_themes;
 mod ids;
 mod input;
 mod popup;
@@ -654,6 +655,7 @@ impl App {
                 list: state::SelectionListState::new(0),
                 original_palette: None,
                 original_theme: None,
+                theme_filter: String::new(),
             },
             integration_recommendations: crate::integration::integration_recommendations(),
             agent_manifest_summaries,

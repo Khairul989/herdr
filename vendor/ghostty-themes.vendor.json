@@ -1,0 +1,7 @@
+{
+  "source": "https://github.com/mbadolato/iTerm2-Color-Schemes",
+  "subdir": "ghostty",
+  "commit": "97e244cf98a0eb2ce4339d2069ec1bba6c81f141",
+  "date": "2026-07-14",
+  "note": "Ghostty-format color schemes. Regenerate generated_themes.rs via `just gen-themes <path-to-checkout>/ghostty`."
+}
