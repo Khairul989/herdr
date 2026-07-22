@@ -12,7 +12,7 @@ use super::widgets::{
 };
 use crate::{
     app::{
-        state::{ExperimentSetting, Palette},
+        state::{all_theme_names, ExperimentSetting, Palette},
         AppState,
     },
     config::ToastDelivery,
@@ -20,6 +20,12 @@ use crate::{
 
 pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 76;
 pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 22;
+
+/// Rows reserved above the Theme picker list: one line for the filter input,
+/// one line for the match count. Shared with the mouse hit-test math in
+/// `app/input/settings.rs` so clicks map to the row the renderer actually
+/// drew.
+pub(crate) const THEME_LIST_TOP_OFFSET: u16 = 2;
 
 pub(crate) fn settings_popup_height(app: &AppState) -> u16 {
     if app.settings.section != crate::app::state::SettingsSection::Integrations {
@@ -361,14 +367,53 @@ fn render_settings_integrations(app: &AppState, frame: &mut Frame, area: Rect) {
 }
 
 fn render_settings_theme(app: &AppState, frame: &mut Frame, area: Rect) {
-    use crate::app::state::THEME_NAMES;
-
     let p = &app.palette;
-    let items: Vec<ListItem> = THEME_NAMES
+
+    let [top_area, list_area] = Layout::vertical([
+        Constraint::Length(THEME_LIST_TOP_OFFSET),
+        Constraint::Min(0),
+    ])
+    .areas::<2>(area);
+    let [input_area, count_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas::<2>(top_area);
+
+    let filter = &app.settings.theme_filter;
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" > ", Style::default().fg(p.overlay1)),
+            Span::styled(filter.as_str(), Style::default().fg(p.text)),
+            Span::styled("█", Style::default().fg(p.accent)),
+        ])),
+        input_area,
+    );
+
+    let filtered = app.filtered_theme_names();
+    let count_label = if filter.is_empty() {
+        format!(" {} themes", filtered.len())
+    } else {
+        format!(" {}/{} themes", filtered.len(), all_theme_names().len())
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(count_label, Style::default().fg(p.overlay1))),
+        count_area,
+    );
+
+    if filtered.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                " no matching themes",
+                Style::default().fg(p.overlay1),
+            )),
+            list_area,
+        );
+        return;
+    }
+
+    let current = app.theme_name.to_lowercase().replace([' ', '_'], "-");
+    let items: Vec<ListItem> = filtered
         .iter()
         .map(|name| {
-            let is_current = name.to_lowercase().replace([' ', '_'], "-")
-                == app.theme_name.to_lowercase().replace([' ', '_'], "-");
+            let is_current = name.to_lowercase().replace([' ', '_'], "-") == current;
             let marker = if is_current { " ✓" } else { "" };
             ListItem::new(Line::from(vec![
                 Span::styled(*name, Style::default().fg(p.subtext0)),
@@ -388,7 +433,7 @@ fn render_settings_theme(app: &AppState, frame: &mut Frame, area: Rect) {
         .style(Style::default().fg(p.subtext0));
 
     let mut state = ListState::default().with_selected(Some(app.settings.list.selected));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, list_area, &mut state);
 }
 
 fn render_settings_toggle(

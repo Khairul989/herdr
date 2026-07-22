@@ -535,8 +535,14 @@ impl Palette {
     }
 
     /// Resolve a theme by name. Returns None for unknown names.
+    ///
+    /// Curated (hand-authored) themes are matched first and always win on
+    /// name collision. Anything else falls back to the generated theme set
+    /// (baked from iTerm2-Color-Schemes), resolved via binary search since
+    /// `generated_themes::GENERATED_THEMES` is sorted ascending by slug.
     pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_lowercase().replace([' ', '_'], "-").as_str() {
+        let key = name.to_lowercase().replace([' ', '_'], "-");
+        match key.as_str() {
             "catppuccin" | "catppuccin-mocha" => Some(Self::catppuccin()),
             "catppuccin-latte" | "latte" | "light" => Some(Self::catppuccin_latte()),
             "terminal" => Some(Self::terminal()),
@@ -555,7 +561,37 @@ impl Palette {
             "rose-pine" | "rosepine" => Some(Self::rose_pine()),
             "rose-pine-dawn" | "rosepine-dawn" | "dawn" => Some(Self::rose_pine_dawn()),
             "vesper" => Some(Self::vesper()),
-            _ => None,
+            _ => super::generated_themes::GENERATED_THEMES
+                .binary_search_by_key(&key.as_str(), |theme| theme.slug)
+                .ok()
+                .map(|i| Self::from_generated(&super::generated_themes::GENERATED_THEMES[i])),
+        }
+    }
+
+    /// Build a palette from a baked `GeneratedTheme`, mapping each packed
+    /// `0xRRGGBB` color to the matching Palette field in token order.
+    fn from_generated(theme: &super::generated_themes::GeneratedTheme) -> Self {
+        fn rgb(packed: u32) -> Color {
+            Color::Rgb((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)
+        }
+        let c = theme.colors;
+        Self {
+            accent: rgb(c[0]),
+            panel_bg: rgb(c[1]),
+            surface0: rgb(c[2]),
+            surface1: rgb(c[3]),
+            surface_dim: rgb(c[4]),
+            overlay0: rgb(c[5]),
+            overlay1: rgb(c[6]),
+            text: rgb(c[7]),
+            subtext0: rgb(c[8]),
+            mauve: rgb(c[9]),
+            green: rgb(c[10]),
+            yellow: rgb(c[11]),
+            red: rgb(c[12]),
+            blue: rgb(c[13]),
+            teal: rgb(c[14]),
+            peach: rgb(c[15]),
         }
     }
 
@@ -1063,6 +1099,21 @@ pub const THEME_NAMES: &[&str] = &[
     "vesper",
 ];
 
+/// The full theme picker list: curated `THEME_NAMES` first (featured), then
+/// every generated theme slug. Curated and generated never overlap — Phase 1
+/// excluded collisions when the generated set was baked.
+pub fn all_theme_names() -> Vec<&'static str> {
+    THEME_NAMES
+        .iter()
+        .copied()
+        .chain(
+            super::generated_themes::GENERATED_THEMES
+                .iter()
+                .map(|theme| theme.slug),
+        )
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuListState {
     pub highlighted: usize,
@@ -1134,6 +1185,8 @@ pub struct SettingsState {
     pub original_palette: Option<Palette>,
     /// The theme name before opening settings.
     pub original_theme: Option<String>,
+    /// Type-to-filter query narrowing the Theme section's picker list.
+    pub theme_filter: String,
 }
 
 pub(crate) enum DragTarget {
@@ -1648,6 +1701,15 @@ impl AppState {
         section == SettingsSection::Integrations && self.integration_updates_available()
     }
 
+    /// Theme names visible in the settings picker under the current
+    /// `theme_filter`, preserving `all_theme_names()` order (curated first).
+    pub(crate) fn filtered_theme_names(&self) -> Vec<&'static str> {
+        all_theme_names()
+            .into_iter()
+            .filter(|name| text_matches_query(&self.settings.theme_filter, name))
+            .collect()
+    }
+
     pub(crate) fn focused_pane_requests_mouse_capture_from(
         &self,
         terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
@@ -1924,6 +1986,7 @@ impl AppState {
                 list: SelectionListState::new(0),
                 original_palette: None,
                 original_theme: None,
+                theme_filter: String::new(),
             },
             integration_recommendations: Vec::new(),
             agent_manifest_summaries: Vec::new(),
@@ -2427,6 +2490,21 @@ mod tests {
                 "theme should resolve: {name}"
             );
         }
+    }
+
+    #[test]
+    fn generated_theme_resolves() {
+        assert!(Palette::from_name("dracula-plus").is_some());
+    }
+
+    #[test]
+    fn curated_wins_over_generated() {
+        assert_eq!(Palette::from_name("dracula"), Some(Palette::dracula()));
+    }
+
+    #[test]
+    fn unknown_theme_is_none() {
+        assert!(Palette::from_name("definitely-not-a-real-theme-xyz").is_none());
     }
 
     #[test]

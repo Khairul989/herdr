@@ -113,9 +113,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # onboarding = true
 
 [theme]
-# Built-in themes: catppuccin, terminal, tokyo-night, dracula, nord,
-#                  gruvbox, one-dark, solarized, kanagawa, rose-pine,
-#                  vesper
+# 18 curated built-in themes: catppuccin, terminal, tokyo-night, dracula, nord,
+#                              gruvbox, one-dark, solarized, kanagawa, rose-pine,
+#                              vesper
+# Plus 500+ additional themes derived from Ghostty's color schemes.
+# Browse and type-to-filter the full set in Settings -> Theme.
+# `name` accepts any of these theme names.
 # name = "catppuccin"
 
 # Follow host terminal light/dark appearance and switch Herdr UI themes.
