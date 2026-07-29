@@ -17,10 +17,16 @@ pub(super) enum ResolvedTokenKind {
     Workspace(String),
     Tab(String),
     Pane(String),
-    Agent(String),
+    Agent {
+        text: String,
+        agent: Option<crate::detect::Agent>,
+    },
     TerminalTitle(String),
     Branch(String),
-    GitStatus { ahead: usize, behind: usize },
+    GitStatus {
+        ahead: usize,
+        behind: usize,
+    },
     Custom(String),
 }
 
@@ -63,7 +69,13 @@ pub(super) fn agent_rows(
                             entry.pane_label.clone().map(ResolvedTokenKind::Pane)
                         }
                         AgentSidebarToken::Agent => {
-                            entry.agent_label.clone().map(ResolvedTokenKind::Agent)
+                            entry
+                                .agent_label
+                                .clone()
+                                .map(|text| ResolvedTokenKind::Agent {
+                                    text,
+                                    agent: entry.agent,
+                                })
                         }
                         AgentSidebarToken::TerminalTitle => entry
                             .terminal_title
@@ -202,9 +214,10 @@ mod tests {
         );
         assert_eq!(
             rows[1],
-            vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
-                "pi".into()
-            ))]
+            vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent {
+                text: "pi".into(),
+                agent: Some(crate::detect::Agent::Pi),
+            })]
         );
     }
 
@@ -272,9 +285,10 @@ mod tests {
 
         assert_eq!(
             agent_rows(&config, &pi, "working"),
-            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent(
-                "renamed pi".into()
-            ))]]
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Agent {
+                text: "renamed pi".into(),
+                agent: Some(crate::detect::Agent::Pi),
+            })]]
         );
 
         pi.agent = None;

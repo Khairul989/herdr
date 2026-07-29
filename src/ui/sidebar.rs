@@ -2,7 +2,7 @@ mod tokens;
 
 use ratatui::{
     layout::{Alignment, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -939,7 +939,7 @@ fn resolved_token_spans(
             | ResolvedTokenKind::Workspace(text)
             | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
-            | ResolvedTokenKind::Agent(text)
+            | ResolvedTokenKind::Agent { text, .. }
             | ResolvedTokenKind::TerminalTitle(text)
             | ResolvedTokenKind::Branch(text)
             | ResolvedTokenKind::Custom(text) => display_width(text),
@@ -1046,10 +1046,22 @@ fn resolved_token_spans(
                     apply_token_style(workspace_style, token.style),
                 ));
             }
-            ResolvedTokenKind::Tab(text)
-            | ResolvedTokenKind::Pane(text)
-            | ResolvedTokenKind::Agent(text)
-            | ResolvedTokenKind::Branch(text) => {
+            ResolvedTokenKind::Tab(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    apply_token_style(Style::default().fg(p.teal), token.style),
+                ));
+            }
+            ResolvedTokenKind::Agent { text, agent } => {
+                let base = agent
+                    .and_then(|agent| agent_brand_style(agent, p))
+                    .unwrap_or(secondary_style);
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    apply_token_style(base, token.style),
+                ));
+            }
+            ResolvedTokenKind::Pane(text) | ResolvedTokenKind::Branch(text) => {
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),
                     apply_token_style(secondary_style, token.style),
@@ -1084,6 +1096,40 @@ fn resolved_token_spans(
         }
     }
     spans
+}
+
+/// Brand-recognition color for the agent name token. These are fixed brand
+/// associations rather than palette tokens so they stay stable across themes;
+/// brands with no color identity render bold in the theme's text color, and
+/// agents without a verified brand association return `None` to keep the
+/// default secondary styling. Exhaustive on purpose: adding an `Agent`
+/// variant must decide its branding here.
+fn agent_brand_style(agent: crate::detect::Agent, p: &Palette) -> Option<Style> {
+    use crate::detect::Agent;
+    match agent {
+        Agent::Claude => Some(Style::default().fg(Color::Rgb(0xD9, 0x77, 0x57))),
+        Agent::Codex => Some(Style::default().fg(Color::Rgb(0x10, 0xA3, 0x7F))),
+        Agent::Gemini | Agent::Antigravity => {
+            Some(Style::default().fg(Color::Rgb(0x42, 0x85, 0xF4)))
+        }
+        Agent::GithubCopilot => Some(Style::default().fg(Color::Rgb(0x89, 0x57, 0xE5))),
+        Agent::Devin => Some(Style::default().fg(Color::Rgb(0x2E, 0x6C, 0xF6))),
+        Agent::Kiro => Some(Style::default().fg(Color::Rgb(0x79, 0x0E, 0xF7))),
+        Agent::Amp => Some(Style::default().fg(Color::Rgb(0xFF, 0x55, 0x43))),
+        Agent::Grok | Agent::Cursor | Agent::OpenCode => {
+            Some(Style::default().fg(p.text).add_modifier(Modifier::BOLD))
+        }
+        Agent::Pi
+        | Agent::Cline
+        | Agent::Omp
+        | Agent::Mastracode
+        | Agent::Kimi
+        | Agent::Droid
+        | Agent::Hermes
+        | Agent::Kilo
+        | Agent::Qodercli
+        | Agent::Maki => None,
+    }
 }
 
 fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) -> Style {
@@ -1690,6 +1736,168 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert!(spans
             .iter()
             .all(|span| { span.style.fg == Some(ratatui::style::Color::Rgb(0x12, 0x34, 0x56)) }));
+    }
+
+    #[test]
+    fn tab_token_renders_with_teal_and_no_dim() {
+        let palette = crate::app::state::AppState::test_new().palette;
+        let spans = resolved_token_spans(
+            &[ResolvedToken::unstyled(ResolvedTokenKind::Tab(
+                "logs".into(),
+            ))],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+            Style::default(),
+            &palette,
+            20,
+        );
+
+        let span = &spans[0];
+        assert_eq!(span.style.fg, Some(palette.teal));
+        assert!(!span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn agent_token_renders_brand_color_for_known_brand() {
+        let palette = crate::app::state::AppState::test_new().palette;
+        let spans = resolved_token_spans(
+            &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
+                text: "claude".into(),
+                agent: Some(crate::detect::Agent::Claude),
+            })],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+            Style::default(),
+            &palette,
+            20,
+        );
+
+        let span = &spans[0];
+        assert_eq!(
+            span.style.fg,
+            Some(ratatui::style::Color::Rgb(0xD9, 0x77, 0x57))
+        );
+        assert!(!span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn agent_token_user_style_overrides_brand_color() {
+        let config: crate::config::Config = toml::from_str(
+            r##"[ui.sidebar.agents]
+rows = [[{ token = "agent", fg = "#123456" }]]
+"##,
+        )
+        .unwrap();
+        let palette = crate::app::state::AppState::test_new().palette;
+        let spans = resolved_token_spans(
+            &[ResolvedToken {
+                kind: ResolvedTokenKind::Agent {
+                    text: "claude".into(),
+                    agent: Some(crate::detect::Agent::Claude),
+                },
+                style: config.ui.sidebar.agents.rows[0][0].parts().1,
+            }],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+            Style::default(),
+            &palette,
+            20,
+        );
+
+        let span = &spans[0];
+        assert_eq!(
+            span.style.fg,
+            Some(ratatui::style::Color::Rgb(0x12, 0x34, 0x56))
+        );
+        assert_ne!(
+            span.style.fg,
+            Some(ratatui::style::Color::Rgb(0xD9, 0x77, 0x57))
+        );
+    }
+
+    #[test]
+    fn agent_token_renders_monochrome_brand_as_bold_text() {
+        let palette = crate::app::state::AppState::test_new().palette;
+        let spans = resolved_token_spans(
+            &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
+                text: "grok".into(),
+                agent: Some(crate::detect::Agent::Grok),
+            })],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+            Style::default(),
+            &palette,
+            20,
+        );
+
+        let span = &spans[0];
+        assert_eq!(span.style.fg, Some(palette.text));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        assert!(!span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn agent_token_without_brand_keeps_secondary_style() {
+        let palette = crate::app::state::AppState::test_new().palette;
+        let spans = resolved_token_spans(
+            &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
+                text: "maki".into(),
+                agent: Some(crate::detect::Agent::Maki),
+            })],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+            Style::default(),
+            &palette,
+            20,
+        );
+
+        let span = &spans[0];
+        assert_eq!(span.style.fg, Some(palette.overlay0));
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn agent_token_with_no_detected_agent_keeps_secondary_style() {
+        let palette = crate::app::state::AppState::test_new().palette;
+        let spans = resolved_token_spans(
+            &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
+                text: "maki".into(),
+                agent: None,
+            })],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+            Style::default(),
+            &palette,
+            20,
+        );
+
+        let span = &spans[0];
+        assert_eq!(span.style.fg, Some(palette.overlay0));
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

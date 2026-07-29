@@ -131,7 +131,7 @@ pub struct Palette {
     pub red: Color,
     /// Unseen / done notification accent.
     pub blue: Color,
-    /// Notification accent / unseen markers.
+    /// Notification accent / unseen markers / sidebar tab labels.
     pub teal: Color,
     /// Interrupted / warning states.
     pub peach: Color,

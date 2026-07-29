@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- Sidebar tab tokens now render in the theme's notification accent color, and detected agent names render in their provider's brand color (bold plain text for monochrome brands).
+
 ## [0.7.5] - 2026-07-21
 
 ### Breaking Changes
