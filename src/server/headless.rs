@@ -4173,6 +4173,26 @@ impl HeadlessServer {
                         &mut next_graphics_cache,
                     ));
                 crate::render_prof::duration_since("full_render.graphics_encode", graphics_started);
+                // Sidebar agent logos ride the same per-client graphics channel
+                // as pane images: encoded server-side, written by the client.
+                let logo_started = crate::render_prof::timer();
+                frame
+                    .graphics
+                    .extend(crate::kitty_graphics::encode_agent_logos(
+                        &crate::ui::sidebar::agent_logo_placements(
+                            &self.app.state,
+                            &self.app.terminal_runtimes,
+                            // The sidebar rect, NOT the client viewport: the text
+                            // pass renders into this rect, and the collector must
+                            // measure the same width or truncation differs and the
+                            // image lands away from the reserved cells.
+                            self.app.state.view.sidebar_rect,
+                        ),
+                        &self.app.state,
+                        cell_size,
+                        &mut next_graphics_cache,
+                    ));
+                crate::render_prof::duration_since("full_render.logo_encode", logo_started);
             } else {
                 frame.graphics = next_graphics_cache.clear_bytes();
             }

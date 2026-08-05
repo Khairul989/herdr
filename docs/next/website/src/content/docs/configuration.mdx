@@ -298,6 +298,7 @@ Agent rows accept these built-in tokens:
 - `tab` — tab name when available.
 - `pane` — pane name when available.
 - `agent` — detected or reported agent display name.
+- `agent_icon` — the agent's brand logo, drawn as an image on terminals that support Kitty graphics. Requires `experimental.kitty_graphics` and `ui.sidebar_agent_logos`. Where either is unavailable, or the agent has no bundled logo, the token falls back to the brand-colored agent name — unless the same row already contains an `agent` token, in which case it renders nothing so the name is not printed twice. Pair it as `["agent_icon", "agent"]` for a logo beside the name, or use it alone for a logo that degrades to the name.
 - `terminal_title` — latest OSC 0/2 terminal title after safety normalization.
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
 - `$name` — custom pane metadata named `name`.

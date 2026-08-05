@@ -1597,6 +1597,8 @@ pub struct AppState {
     /// `[experimental] switch_ascii_input_source_in_prefix`.
     pub switch_ascii_input_source_in_prefix: bool,
     pub kitty_graphics_enabled: bool,
+    /// Whether the sidebar should draw agent brand logos as images.
+    pub sidebar_agent_logos: bool,
     pub default_shell: String,
     pub shell_mode: crate::config::ShellModeConfig,
     pub new_terminal_cwd: NewTerminalCwdConfig,
@@ -1966,6 +1968,7 @@ impl AppState {
             cjk_ime_cursor_shape: 2, // steady_block
             switch_ascii_input_source_in_prefix: false,
             kitty_graphics_enabled: false,
+            sidebar_agent_logos: true,
             default_shell: String::new(),
             shell_mode: crate::config::ShellModeConfig::Auto,
             new_terminal_cwd: NewTerminalCwdConfig::Follow,

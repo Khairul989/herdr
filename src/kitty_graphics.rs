@@ -132,6 +132,37 @@ pub(crate) struct HostGraphicsCache {
     /// Host image currently backing each (pane, source image id) pair.
     sources: HashMap<HostSourceKey, u32>,
     view: Option<HostViewKey>,
+    /// Agent logos already transmitted to this client, keyed by Kitty image id.
+    ///
+    /// The value fingerprints the pixels that were sent (tint plus pixel size),
+    /// so a theme switch or a font-size change retransmits instead of leaving a
+    /// stale image on screen.
+    logo_images: HashMap<u32, LogoImageSignature>,
+    /// Where each logo placement currently sits, keyed by
+    /// `(image id, placement id)`.
+    ///
+    /// The key needs both halves: several panes can run the same agent, and
+    /// Kitty identifies a placement by that pair. Keying on the image alone
+    /// makes every pane after the first overwrite its predecessor's placement,
+    /// leaving exactly one logo on screen no matter how many panes run it.
+    logo_placements: HashMap<(u32, u32), LogoPlacementSignature>,
+}
+
+/// Identifies the pixels transmitted for a logo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LogoImageSignature {
+    tint: u32,
+    width_px: u32,
+    height_px: u32,
+}
+
+/// Identifies where a logo currently sits on the host screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LogoPlacementSignature {
+    col: u16,
+    row: u16,
+    cols: u16,
+    rows: u16,
 }
 
 static KITTY_GRAPHICS_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -496,9 +527,16 @@ impl HostGraphicsCache {
         for id in self.images.keys().copied().collect::<Vec<_>>() {
             encode_delete_image(&mut bytes, id);
         }
+        // Logos live in their own id range but on the same host surface, so a
+        // surface reset has to drop them too or they linger over the redraw.
+        for id in self.logo_images.keys().copied().collect::<Vec<_>>() {
+            encode_delete_image(&mut bytes, id);
+        }
         self.images.clear();
         self.placements.clear();
         self.sources.clear();
+        self.logo_images.clear();
+        self.logo_placements.clear();
         self.view = None;
         bytes
     }
@@ -997,9 +1035,481 @@ fn encode_kitty_data(out: &mut Vec<u8>, control: &str, data: &[u8]) {
     }
 }
 
+/// Largest cell dimension a logo will render for, in pixels.
+///
+/// Far above any real terminal cell (a 4K display at a huge font size is still
+/// well under 200px), so clamping here never degrades a genuine client while
+/// bounding the allocation a hostile or buggy one can request.
+const MAX_LOGO_CELL_PX: u32 = 512;
+
+/// Factor by which a logo is rendered above its nominal cell box, so it stays
+/// sharp on HiDPI displays where the reported cell size is in logical pixels.
+const LOGO_SUPERSAMPLE: u32 = 2;
+
+/// Placement ids are assigned per occurrence, counting from 1 within each
+/// agent, so two panes running the same agent get distinct placements.
+const FIRST_LOGO_PLACEMENT_ID: u32 = 1;
+
+/// Encode the Kitty bytes that draw the sidebar's agent logos for one client.
+///
+/// Transmission and placement are separate on purpose. A tinted logo is tens of
+/// kilobytes; re-sending it every frame would dwarf the text frame it decorates.
+/// The per-client cache remembers which image bytes a client already holds and
+/// where each one currently sits, so a steady sidebar emits nothing at all and
+/// a scrolled one emits only short placement commands.
+pub(crate) fn encode_agent_logos(
+    placements: &[crate::ui::sidebar::agent_logo::AgentLogoPlacement],
+    app: &AppState,
+    cell_size: HostCellSize,
+    cache: &mut HostGraphicsCache,
+) -> Vec<u8> {
+    use crate::ui::sidebar::agent_logo::{
+        agent_logo_mask, fit_mask_to_box, logo_image_id, logo_tint, tint_fingerprint, tint_mask,
+        LOGO_COLS,
+    };
+
+    let mut out = Vec::new();
+    // Match `encode_local_pane_graphics`: outside Terminal mode an overlay owns
+    // the screen and that function clears the shared host surface every frame.
+    // Re-placing here would draw logos at full brightness over a dimmed modal,
+    // and — because the clear also empties this cache — would re-transmit every
+    // logo's pixels on every frame.
+    if app.mode != Mode::Terminal {
+        return out;
+    }
+    if !cell_size.is_known() {
+        return out;
+    }
+    let palette = &app.palette;
+
+    // Clamp before any arithmetic: the cell size arrives verbatim from a client
+    // over the socket and is not validated on ingest. Unclamped, the
+    // supersampled `width * height` below overflows u32 for absurd values —
+    // panicking the shared server in debug, and wrapping to an undersized
+    // allocation that indexes out of bounds in release. Either kills every
+    // attached session.
+    let cell_size = HostCellSize {
+        width_px: cell_size.width_px.min(MAX_LOGO_CELL_PX),
+        height_px: cell_size.height_px.min(MAX_LOGO_CELL_PX),
+    };
+
+    // Render above the nominal cell box and let the terminal scale down.
+    //
+    // On a HiDPI display the cell size reported to us is in logical pixels
+    // while the terminal draws at the backing scale, so an image built at the
+    // reported size is upscaled and comes out blocky. Supersampling keeps the
+    // aspect ratio identical (both axes scale together, so the 1:1 fill still
+    // holds) and costs a few kilobytes per agent.
+    let width_px = u32::from(LOGO_COLS) * cell_size.width_px * LOGO_SUPERSAMPLE;
+    let height_px = cell_size.height_px * LOGO_SUPERSAMPLE;
+    if width_px == 0 || height_px == 0 {
+        return out;
+    }
+
+    let mut live_keys = HashSet::new();
+    let mut per_agent_counts: HashMap<u32, u32> = HashMap::new();
+
+    for placement in placements {
+        let Some(mask) = agent_logo_mask(placement.agent) else {
+            continue;
+        };
+        let host_id = logo_image_id(placement.agent);
+        // Nth occurrence of this agent on screen gets the Nth placement id.
+        let occurrence = per_agent_counts.entry(host_id).or_insert(0);
+        let placement_id = FIRST_LOGO_PLACEMENT_ID + *occurrence;
+        *occurrence += 1;
+        live_keys.insert((host_id, placement_id));
+
+        let tint = logo_tint(placement.agent, palette);
+        let image_signature = LogoImageSignature {
+            tint: tint_fingerprint(tint),
+            width_px,
+            height_px,
+        };
+
+        // Retransmit when the tint changed (theme switch) or the cell box
+        // changed (font size or display change), otherwise reuse what the
+        // client already holds.
+        if cache.logo_images.get(&host_id) != Some(&image_signature) {
+            let fitted = fit_mask_to_box(mask, width_px, height_px);
+            let rgba = tint_mask(&fitted, tint);
+            let control = format!(
+                "a=t,t=d,f={},s={width_px},v={height_px},i={host_id},q=2",
+                kitty_format_code(KittyImageFormat::Rgba)
+            );
+            encode_kitty_data(&mut out, &control, &rgba);
+            cache.logo_images.insert(host_id, image_signature);
+            // The image changed underneath any existing placement, so force the
+            // placement to be re-emitted rather than assumed still correct.
+            cache
+                .logo_placements
+                .retain(|(image, _), _| *image != host_id);
+        }
+
+        let placement_signature = LogoPlacementSignature {
+            col: placement.col,
+            row: placement.row,
+            cols: LOGO_COLS,
+            rows: 1,
+        };
+        if cache.logo_placements.get(&(host_id, placement_id)) == Some(&placement_signature) {
+            continue;
+        }
+
+        // C=1 keeps the cursor where it was; the text frame owns cursor
+        // position and must not be disturbed by decoration.
+        let _ = write!(
+            &mut out,
+            "\x1b[{};{}H",
+            placement.row + 1,
+            placement.col + 1
+        );
+        let _ = write!(
+            &mut out,
+            "\x1b_Ga=p,i={host_id},p={placement_id},c={LOGO_COLS},r=1,z=0,C=1,q=2;\x1b\\"
+        );
+        cache
+            .logo_placements
+            .insert((host_id, placement_id), placement_signature);
+    }
+
+    // Retire logos that are no longer on screen — an agent that exited, or a
+    // row scrolled out of view. Leaving the placement behind would paint a logo
+    // over whatever text now occupies those cells.
+    let stale: Vec<(u32, u32)> = cache
+        .logo_placements
+        .keys()
+        .copied()
+        .filter(|key| !live_keys.contains(key))
+        .collect();
+    for (host_id, placement_id) in stale {
+        encode_delete_placement(&mut out, host_id, placement_id);
+        cache.logo_placements.remove(&(host_id, placement_id));
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod agent_logos {
+        use super::*;
+        use crate::detect::Agent;
+        use crate::ui::sidebar::agent_logo::{logo_image_id, AgentLogoPlacement};
+
+        const CELL: HostCellSize = HostCellSize {
+            width_px: 10,
+            height_px: 22,
+        };
+
+        fn place(agent: Agent, col: u16, row: u16) -> AgentLogoPlacement {
+            AgentLogoPlacement { agent, col, row }
+        }
+
+        fn terminal_app() -> AppState {
+            let mut app = AppState::test_new();
+            app.mode = Mode::Terminal;
+            app
+        }
+
+        fn transmits(bytes: &[u8]) -> usize {
+            let text = String::from_utf8_lossy(bytes);
+            text.matches("a=t,t=d").count()
+        }
+
+        fn placements(bytes: &[u8]) -> usize {
+            let text = String::from_utf8_lossy(bytes);
+            text.matches("a=p,i=").count()
+        }
+
+        fn deletes(bytes: &[u8]) -> usize {
+            let text = String::from_utf8_lossy(bytes);
+            text.matches("a=d,d=i").count()
+        }
+
+        #[test]
+        fn first_frame_transmits_and_places_each_logo() {
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let bytes = encode_agent_logos(
+                &[place(Agent::Claude, 3, 5), place(Agent::Codex, 3, 8)],
+                &app,
+                CELL,
+                &mut cache,
+            );
+            assert_eq!(transmits(&bytes), 2);
+            assert_eq!(placements(&bytes), 2);
+        }
+
+        #[test]
+        fn an_unchanged_frame_emits_nothing() {
+            // The sidebar re-renders constantly. Re-sending tens of kilobytes of
+            // image per frame would swamp the text frame it decorates.
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let args = [place(Agent::Claude, 3, 5)];
+            let first = encode_agent_logos(&args, &app, CELL, &mut cache);
+            assert!(
+                !first.is_empty(),
+                "control: first frame must emit something"
+            );
+
+            let second = encode_agent_logos(&args, &app, CELL, &mut cache);
+            assert!(
+                second.is_empty(),
+                "unchanged frame re-emitted {} bytes",
+                second.len()
+            );
+        }
+
+        #[test]
+        fn scrolling_re_places_without_retransmitting() {
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+
+            let moved = encode_agent_logos(&[place(Agent::Claude, 3, 9)], &app, CELL, &mut cache);
+            assert_eq!(transmits(&moved), 0, "image bytes should be reused");
+            assert_eq!(placements(&moved), 1, "logo should be re-placed");
+        }
+
+        #[test]
+        fn a_theme_change_retransmits_the_image() {
+            // Tint is baked into the transmitted pixels, so a palette change
+            // cannot be honoured by re-placing the old image.
+            let mut cache = HostGraphicsCache::default();
+            let mut app = terminal_app();
+            let args = [place(Agent::OpenCode, 3, 5)];
+            encode_agent_logos(&args, &app, CELL, &mut cache);
+
+            app.palette.text = ratatui::style::Color::Rgb(1, 2, 3);
+            let retinted = encode_agent_logos(&args, &app, CELL, &mut cache);
+            assert_eq!(transmits(&retinted), 1, "new tint must be transmitted");
+            assert_eq!(placements(&retinted), 1, "and re-placed");
+        }
+
+        #[test]
+        fn a_font_size_change_retransmits_the_image() {
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let args = [place(Agent::Claude, 3, 5)];
+            encode_agent_logos(&args, &app, CELL, &mut cache);
+
+            let bigger = HostCellSize {
+                width_px: 20,
+                height_px: 44,
+            };
+            let rescaled = encode_agent_logos(&args, &app, bigger, &mut cache);
+            assert_eq!(
+                transmits(&rescaled),
+                1,
+                "a new cell box needs pixels at the new size"
+            );
+        }
+
+        #[test]
+        fn a_logo_that_leaves_the_screen_is_deleted() {
+            // Otherwise the image keeps painting over whatever text now owns
+            // those cells.
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            encode_agent_logos(
+                &[place(Agent::Claude, 3, 5), place(Agent::Codex, 3, 8)],
+                &app,
+                CELL,
+                &mut cache,
+            );
+
+            let fewer = encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+            assert_eq!(deletes(&fewer), 1, "the departed logo must be retired");
+            let text = String::from_utf8_lossy(&fewer);
+            assert!(
+                text.contains(&format!("i={}", logo_image_id(Agent::Codex))),
+                "the delete should name the agent that left"
+            );
+        }
+
+        #[test]
+        fn several_panes_running_the_same_agent_each_get_their_own_placement() {
+            // Kitty keys a placement by (image id, placement id). Reusing one
+            // placement id for every pane running an agent makes each placement
+            // overwrite the last, so N panes show exactly one logo.
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let bytes = encode_agent_logos(
+                &[
+                    place(Agent::Claude, 3, 5),
+                    place(Agent::Claude, 3, 8),
+                    place(Agent::Claude, 3, 11),
+                ],
+                &app,
+                CELL,
+                &mut cache,
+            );
+            assert_eq!(transmits(&bytes), 1, "one image is enough for all three");
+            assert_eq!(
+                placements(&bytes),
+                3,
+                "but each pane needs its own placement"
+            );
+
+            let text = String::from_utf8_lossy(&bytes);
+            let id = logo_image_id(Agent::Claude);
+            for placement_id in 1..=3 {
+                assert!(
+                    text.contains(&format!("i={id},p={placement_id},")),
+                    "missing placement {placement_id}; ids collided"
+                );
+            }
+        }
+
+        #[test]
+        fn closing_one_of_several_same_agent_panes_retires_only_that_placement() {
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            encode_agent_logos(
+                &[place(Agent::Claude, 3, 5), place(Agent::Claude, 3, 8)],
+                &app,
+                CELL,
+                &mut cache,
+            );
+
+            let fewer = encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+            assert_eq!(deletes(&fewer), 1, "exactly one placement should retire");
+            assert_eq!(
+                transmits(&fewer),
+                0,
+                "the image is still in use and must not be resent"
+            );
+            let text = String::from_utf8_lossy(&fewer);
+            assert!(
+                text.contains(&format!("i={},p=2", logo_image_id(Agent::Claude))),
+                "the second placement is the one that should go"
+            );
+        }
+
+        #[test]
+        fn no_logo_is_emitted_outside_terminal_mode() {
+            // An overlay owns the screen and the pane encoder clears the host
+            // surface every frame there. Placing logos would paint them over a
+            // dimmed modal and re-transmit their pixels on every frame.
+            let mut app = terminal_app();
+            app.mode = Mode::Settings;
+            let mut cache = HostGraphicsCache::default();
+            let bytes = encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+            assert!(
+                bytes.is_empty(),
+                "emitted {} bytes in Settings mode",
+                bytes.len()
+            );
+        }
+
+        #[test]
+        fn an_absurd_client_cell_size_is_clamped_instead_of_overflowing() {
+            // Cell size arrives unvalidated from the client. Unclamped, the
+            // supersampled width * height overflows u32 and takes the shared
+            // server down with every attached session.
+            let app = terminal_app();
+            let mut cache = HostGraphicsCache::default();
+            let hostile = HostCellSize {
+                width_px: 100_000,
+                height_px: 100_000,
+            };
+            let bytes =
+                encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, hostile, &mut cache);
+            assert!(!bytes.is_empty(), "a clamped size should still render");
+            let text = String::from_utf8_lossy(&bytes);
+            let expected_w = 2 * MAX_LOGO_CELL_PX * LOGO_SUPERSAMPLE;
+            assert!(
+                text.contains(&format!("s={expected_w},")),
+                "expected clamped width {expected_w} in the transmit control"
+            );
+        }
+
+        #[test]
+        fn an_unknown_cell_size_emits_nothing() {
+            // Without a real cell box any image we built would be stretched by
+            // the terminal; better to draw no logo than a distorted one.
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let bytes = encode_agent_logos(
+                &[place(Agent::Claude, 3, 5)],
+                &app,
+                HostCellSize::default(),
+                &mut cache,
+            );
+            assert!(bytes.is_empty());
+        }
+
+        #[test]
+        fn agents_without_a_mask_are_skipped_without_disturbing_others() {
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let bytes = encode_agent_logos(
+                &[place(Agent::Kimi, 3, 5), place(Agent::Claude, 3, 8)],
+                &app,
+                CELL,
+                &mut cache,
+            );
+            assert_eq!(transmits(&bytes), 1, "only the agent with a mask draws");
+            assert_eq!(placements(&bytes), 1);
+        }
+
+        #[test]
+        fn a_surface_reset_deletes_logo_images_too() {
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+
+            let cleared = cache.clear_bytes();
+            let text = String::from_utf8_lossy(&cleared);
+            assert!(
+                text.contains(&format!("a=d,d=I,i={}", logo_image_id(Agent::Claude))),
+                "surface reset must drop the logo image, not just pane images"
+            );
+
+            // And the cleared cache must behave like a fresh one.
+            let after = encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+            assert_eq!(
+                transmits(&after),
+                1,
+                "cache should have forgotten the image"
+            );
+        }
+
+        #[test]
+        fn placement_positions_the_cursor_one_based() {
+            // Kitty cursor addressing is 1-based; an off-by-one here shifts every
+            // logo up and left by a cell.
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let bytes = encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                text.contains("\x1b[6;4H"),
+                "expected cursor move to row 6 col 4, got: {text:?}"
+            );
+        }
+
+        #[test]
+        fn placement_reserves_exactly_the_token_width() {
+            // The text layer reserves LOGO_COLS cells. Placing into a different
+            // number of columns is what pushes labels out of alignment.
+            let mut cache = HostGraphicsCache::default();
+            let app = terminal_app();
+            let bytes = encode_agent_logos(&[place(Agent::Claude, 3, 5)], &app, CELL, &mut cache);
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                text.contains(&format!(
+                    "c={},r=1",
+                    crate::ui::sidebar::agent_logo::LOGO_COLS
+                )),
+                "placement must match the reserved token width"
+            );
+        }
+    }
 
     fn test_placement(viewport_col: i32, viewport_row: i32) -> HostPlacement {
         HostPlacement {
