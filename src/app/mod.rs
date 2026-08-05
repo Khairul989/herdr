@@ -646,6 +646,7 @@ impl App {
                 .experimental
                 .switch_ascii_input_source_in_prefix,
             kitty_graphics_enabled: config.experimental.kitty_graphics,
+            sidebar_agent_logos: config.ui.sidebar_agent_logos,
             default_shell: config.terminal.default_shell.clone(),
             shell_mode: config.terminal.shell_mode,
             new_terminal_cwd: config.terminal.new_cwd.clone(),
@@ -1465,6 +1466,7 @@ impl App {
         if !invalid_section("experimental") {
             let was_kitty_graphics_enabled = self.state.kitty_graphics_enabled;
             self.state.kitty_graphics_enabled = config.experimental.kitty_graphics;
+            self.state.sidebar_agent_logos = config.ui.sidebar_agent_logos;
             crate::kitty_graphics::set_enabled(config.experimental.kitty_graphics);
             if was_kitty_graphics_enabled && !config.experimental.kitty_graphics {
                 let _ = crate::kitty_graphics::clear_all_host_graphics();

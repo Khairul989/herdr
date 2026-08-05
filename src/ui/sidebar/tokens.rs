@@ -21,6 +21,16 @@ pub(super) enum ResolvedTokenKind {
         text: String,
         agent: Option<crate::detect::Agent>,
     },
+    /// Reserved cells for an agent's brand logo.
+    ///
+    /// The text layer only holds the space open; the image itself is drawn over
+    /// these cells by the Kitty graphics pass. `fallback` carries the agent name
+    /// used when no image can be drawn, so the row still identifies the agent on
+    /// a terminal without graphics support.
+    AgentIcon {
+        agent: Option<crate::detect::Agent>,
+        fallback: String,
+    },
     TerminalTitle(String),
     Branch(String),
     GitStatus {
@@ -50,51 +60,59 @@ pub(super) fn agent_rows(
         .rows_for_agent(entry.agent)
         .iter()
         .filter_map(|row| {
-            let resolved = row
-                .iter()
-                .filter_map(|configured| {
-                    let (token, style) = configured.parts();
-                    let kind = match token {
-                        AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
-                        AgentSidebarToken::StateText => {
-                            Some(ResolvedTokenKind::StateText(state_text.to_string()))
-                        }
-                        AgentSidebarToken::Workspace => {
-                            Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
-                        }
-                        AgentSidebarToken::Tab => {
-                            entry.primary_tab_label.clone().map(ResolvedTokenKind::Tab)
-                        }
-                        AgentSidebarToken::Pane => {
-                            entry.pane_label.clone().map(ResolvedTokenKind::Pane)
-                        }
-                        AgentSidebarToken::Agent => {
-                            entry
-                                .agent_label
-                                .clone()
-                                .map(|text| ResolvedTokenKind::Agent {
-                                    text,
-                                    agent: entry.agent,
+            let resolved =
+                row.iter()
+                    .filter_map(|configured| {
+                        let (token, style) = configured.parts();
+                        let kind = match token {
+                            AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
+                            AgentSidebarToken::AgentIcon => {
+                                entry.agent_label.clone().map(|fallback| {
+                                    ResolvedTokenKind::AgentIcon {
+                                        agent: entry.agent,
+                                        fallback,
+                                    }
                                 })
-                        }
-                        AgentSidebarToken::TerminalTitle => entry
-                            .terminal_title
-                            .clone()
-                            .map(ResolvedTokenKind::TerminalTitle),
-                        AgentSidebarToken::TerminalTitleStripped => entry
-                            .terminal_title_stripped
-                            .clone()
-                            .map(ResolvedTokenKind::TerminalTitle),
-                        AgentSidebarToken::Custom(name) => entry
-                            .tokens
-                            .get(name)
-                            .cloned()
-                            .map(ResolvedTokenKind::Custom),
-                        AgentSidebarToken::Styled { .. } => None,
-                    }?;
-                    Some(ResolvedToken::new(kind, style))
-                })
-                .collect::<Vec<_>>();
+                            }
+                            AgentSidebarToken::StateText => {
+                                Some(ResolvedTokenKind::StateText(state_text.to_string()))
+                            }
+                            AgentSidebarToken::Workspace => {
+                                Some(ResolvedTokenKind::Workspace(entry.primary_label.clone()))
+                            }
+                            AgentSidebarToken::Tab => {
+                                entry.primary_tab_label.clone().map(ResolvedTokenKind::Tab)
+                            }
+                            AgentSidebarToken::Pane => {
+                                entry.pane_label.clone().map(ResolvedTokenKind::Pane)
+                            }
+                            AgentSidebarToken::Agent => {
+                                entry
+                                    .agent_label
+                                    .clone()
+                                    .map(|text| ResolvedTokenKind::Agent {
+                                        text,
+                                        agent: entry.agent,
+                                    })
+                            }
+                            AgentSidebarToken::TerminalTitle => entry
+                                .terminal_title
+                                .clone()
+                                .map(ResolvedTokenKind::TerminalTitle),
+                            AgentSidebarToken::TerminalTitleStripped => entry
+                                .terminal_title_stripped
+                                .clone()
+                                .map(ResolvedTokenKind::TerminalTitle),
+                            AgentSidebarToken::Custom(name) => entry
+                                .tokens
+                                .get(name)
+                                .cloned()
+                                .map(ResolvedTokenKind::Custom),
+                            AgentSidebarToken::Styled { .. } => None,
+                        }?;
+                        Some(ResolvedToken::new(kind, style))
+                    })
+                    .collect::<Vec<_>>();
             (!resolved.is_empty()).then_some(resolved)
         })
         .collect()

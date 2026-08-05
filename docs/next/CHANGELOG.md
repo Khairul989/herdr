@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- A new `agent_icon` sidebar token draws the detected agent's brand logo as an image on terminals that support Kitty graphics, controlled by `ui.sidebar_agent_logos` and requiring `experimental.kitty_graphics`. Terminals without graphics support, and agents with no bundled logo, fall back to the brand-colored agent name.
 - `theme.custom.sidebar_bg` can now give the desktop sidebar its own background without changing built-in theme defaults.
 - Settings and `ui.status_indicators = "symbols"` can now use distinct static shapes for blocked, working, done, idle, and unknown agent states. (#2260)
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.

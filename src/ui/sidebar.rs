@@ -1,3 +1,4 @@
+pub(crate) mod agent_logo;
 mod tokens;
 
 use ratatui::{
@@ -987,6 +988,110 @@ pub(super) fn render_sidebar(
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
+/// Cell positions of every agent logo currently visible in the sidebar.
+///
+/// Mirrors the agent panel's own layout walk and asks `resolved_token_spans`
+/// for the column it actually reserved, rather than re-deriving token widths.
+/// A logo can therefore only be placed where a gap was really left.
+///
+/// Pure: this reads state and returns positions, so it can run after `render`
+/// without violating the rule that rendering never mutates state.
+pub(crate) fn agent_logo_placements(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+) -> Vec<agent_logo::AgentLogoPlacement> {
+    let mut placements = Vec::new();
+    if !agent_logos_drawable(app) {
+        return placements;
+    }
+
+    let (_, panel) = expanded_sidebar_sections(area, app.sidebar_section_split);
+    if panel == Rect::default() {
+        return placements;
+    }
+    let metrics = agent_panel_scroll_metrics(app, panel);
+    let body = agent_panel_body_rect(panel, should_show_scrollbar(metrics));
+    if body == Rect::default() {
+        return placements;
+    }
+
+    let p = &app.palette;
+    let details = agent_panel_entries_from(app, terminal_runtimes);
+    let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
+    let mut row_y = body.y;
+    let body_bottom = body.y + body.height;
+
+    for (index, detail) in details.iter().enumerate().skip(scroll) {
+        let rows = resolved_agent_rows(app, detail);
+        let height = (rows.len().max(1) as u16).min(body.height);
+        if row_y.saturating_add(height) > body_bottom {
+            break;
+        }
+
+        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
+        for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
+            let prefix = if row_index == 0 { 1u16 } else { 3 };
+            let mut logo_column = None;
+            // Styles do not affect widths, so only the state icon (which is
+            // measured) has to match the renderer exactly.
+            let _ = resolved_token_spans(
+                resolved,
+                state_icon,
+                Style::default(),
+                Style::default(),
+                Style::default(),
+                Style::default(),
+                p,
+                body.width.saturating_sub(prefix) as usize,
+                true,
+                &mut logo_column,
+            );
+            let (Some(column), Some(agent)) = (logo_column, detail.agent) else {
+                continue;
+            };
+            placements.push(agent_logo::AgentLogoPlacement {
+                agent,
+                col: body.x + prefix + column,
+                row: row_y + row_index as u16,
+            });
+        }
+
+        row_y = row_y
+            .saturating_add(height)
+            .saturating_add(agent_entry_gap(app, index, details.len()))
+            .min(body_bottom);
+    }
+
+    placements
+}
+
+/// Whether this client can draw agent logos as images at all.
+///
+/// Both the renderer (which reserves the cells) and the placement collector
+/// (which draws into them) ask this one question, so they cannot disagree about
+/// whether a row has a logo in it.
+pub(crate) fn agent_logos_drawable(app: &AppState) -> bool {
+    // Every condition the render pass uses to decide whether agent rows are on
+    // screen at all must be restated here. A logo is drawn ABOVE the text layer
+    // (Kitty z=0), so a placement emitted for a surface that was never rendered
+    // does not go unnoticed — it paints over live pane output.
+    app.sidebar_agent_logos
+        && app.kitty_graphics_enabled
+        && app.host_cell_size.is_known()
+        && app.view.layout != crate::ui::ViewLayout::Mobile
+        && !app.sidebar_collapsed
+        && app.view.sidebar_rect.width > 0
+}
+
+/// Whether an agent's logo can actually be drawn as an image.
+///
+/// Requires both a bundled mask and a host that will render it. Everything else
+/// falls back to text, so a missing logo never leaves a blank gap in the row.
+fn logo_drawable(agent: Option<crate::detect::Agent>, logos_drawable: bool) -> bool {
+    logos_drawable && agent.is_some_and(|agent| agent_logo::agent_logo_mask(agent).is_some())
+}
+
 fn resolved_token_spans(
     resolved: &[ResolvedToken],
     state_icon: (&str, Style),
@@ -996,11 +1101,24 @@ fn resolved_token_spans(
     custom_style: Style,
     p: &Palette,
     max_width: usize,
+    logos_drawable: bool,
+    logo_column: &mut Option<u16>,
 ) -> Vec<Span<'static>> {
+    // Whether this row prints the agent name through its own `agent` token.
+    // Decides both whether `agent_icon` supplies the name when it cannot draw,
+    // and whether it is measured at all.
+    let row_names_agent = resolved
+        .iter()
+        .any(|token| matches!(token.kind, ResolvedTokenKind::Agent { .. }));
     let fixed_widths = resolved
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateIcon => display_width(state_icon.0),
+            // A drawable logo reserves a fixed cell box; otherwise the token
+            // degrades to its text fallback and is measured as flexible.
+            ResolvedTokenKind::AgentIcon { agent, .. } if logo_drawable(*agent, logos_drawable) => {
+                usize::from(agent_logo::LOGO_COLS)
+            }
             ResolvedTokenKind::GitStatus { ahead, behind } => {
                 usize::from(*ahead > 0) * display_width(&format!("↑{ahead}"))
                     + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
@@ -1012,11 +1130,19 @@ fn resolved_token_spans(
     let flexible_widths = resolved
         .iter()
         .map(|token| match &token.kind {
+            // Counted in the fixed pass instead; measuring it here as well
+            // would reserve the cells twice and shrink its neighbours.
+            ResolvedTokenKind::AgentIcon { agent, .. } if logo_drawable(*agent, logos_drawable) => {
+                0
+            }
+            // Elides entirely: the row's own `agent` token prints the name.
+            ResolvedTokenKind::AgentIcon { .. } if row_names_agent => 0,
             ResolvedTokenKind::StateText(text)
             | ResolvedTokenKind::Workspace(text)
             | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
             | ResolvedTokenKind::Agent { text, .. }
+            | ResolvedTokenKind::AgentIcon { fallback: text, .. }
             | ResolvedTokenKind::TerminalTitle(text)
             | ResolvedTokenKind::Branch(text)
             | ResolvedTokenKind::Custom(text) => display_width(text),
@@ -1128,6 +1254,41 @@ fn resolved_token_spans(
                     truncate_end(text, budgets[index]),
                     apply_token_style(Style::default().fg(p.teal), token.style),
                 ));
+            }
+            ResolvedTokenKind::AgentIcon { agent, fallback } => {
+                if logo_drawable(*agent, logos_drawable) {
+                    // Hold the cells open with spaces. The image is drawn over
+                    // them afterwards by the graphics pass, which is what keeps
+                    // render pure: no state is touched here.
+                    //
+                    // The column is reported back from the same pass that lays
+                    // the row out, so the placement can never drift from the
+                    // gap that was actually reserved.
+                    let consumed: usize = spans
+                        .iter()
+                        .map(|span| display_width(span.content.as_ref()))
+                        .sum();
+                    *logo_column = Some(consumed as u16);
+                    spans.push(Span::styled(
+                        " ".repeat(usize::from(agent_logo::LOGO_COLS)),
+                        apply_token_style(Style::default(), token.style),
+                    ));
+                } else if row_names_agent {
+                    // The row already carries an `agent` token, which will print
+                    // the name itself. Adding the fallback here would print it
+                    // twice, so the icon simply elides.
+                } else {
+                    // Nothing else in this row identifies the agent, so the icon
+                    // degrades to the name rather than leaving the row blank.
+                    // Same brand color the `agent` token would use.
+                    let base = agent
+                        .and_then(|agent| agent_brand_style(agent, p))
+                        .unwrap_or(secondary_style);
+                    spans.push(Span::styled(
+                        truncate_end(fallback, budgets[index]),
+                        apply_token_style(base, token.style),
+                    ));
+                }
             }
             ResolvedTokenKind::Agent { text, agent } => {
                 let base = agent
@@ -1383,6 +1544,7 @@ fn render_workspace_list(
             } else {
                 0
             };
+            let mut logo_column = None;
             spans.extend(resolved_token_spans(
                 resolved,
                 state_icon,
@@ -1394,6 +1556,8 @@ fn render_workspace_list(
                 card.rect
                     .width
                     .saturating_sub(prefix_width + trailing_width) as usize,
+                false,
+                &mut logo_column,
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(spans)),
@@ -1513,6 +1677,7 @@ fn render_agent_detail(
         return;
     }
 
+    let logos_drawable = agent_logos_drawable(app);
     let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
@@ -1545,6 +1710,7 @@ fn render_agent_detail(
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
+            let mut logo_column = None;
             spans.extend(resolved_token_spans(
                 resolved,
                 state_icon,
@@ -1555,6 +1721,8 @@ fn render_agent_detail(
                 p,
                 body.width
                     .saturating_sub(if row_index == 0 { 1 } else { 3 }) as usize,
+                logos_drawable,
+                &mut logo_column,
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).style(row_style),
@@ -1758,6 +1926,268 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
         assert!(!agent.add_modifier.contains(Modifier::DIM));
     }
 
+    /// Build a sidebar showing one agent whose row starts with an `agent_icon`
+    /// token, with logos drawable.
+    fn app_with_logo_row(agent: Agent) -> crate::app::state::AppState {
+        use crate::config::AgentSidebarToken;
+
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_agents.rows = vec![
+            vec![AgentSidebarToken::StateIcon, AgentSidebarToken::Workspace],
+            vec![AgentSidebarToken::AgentIcon, AgentSidebarToken::Agent],
+        ];
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(agent);
+        app.sidebar_agent_logos = true;
+        app.kitty_graphics_enabled = true;
+        app.view.sidebar_rect = Rect::new(0, 0, 26, 20);
+        app.host_cell_size = crate::kitty_graphics::HostCellSize {
+            width_px: 10,
+            height_px: 22,
+        };
+        app
+    }
+
+    #[test]
+    fn a_logo_is_placed_exactly_on_the_cells_the_renderer_reserved() {
+        // The whole design rests on these two halves agreeing. If the collector
+        // and the renderer ever disagree, a logo lands on top of text.
+        let app = app_with_logo_row(Agent::Claude);
+        let area = Rect::new(0, 0, 26, 20);
+        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let placements = agent_logo_placements(&app, &TerminalRuntimeRegistry::new(), area);
+        assert_eq!(placements.len(), 1, "expected one logo, got {placements:?}");
+        let placement = placements[0];
+
+        for offset in 0..agent_logo::LOGO_COLS {
+            let cell = &buffer[(placement.col + offset, placement.row)];
+            assert_eq!(
+                cell.symbol(),
+                " ",
+                "cell ({}, {}) under the logo holds {:?}, not reserved space",
+                placement.col + offset,
+                placement.row,
+                cell.symbol()
+            );
+        }
+
+        // Control: the row must actually carry the agent label after the
+        // reserved box, or the blank-cell assertion above would pass on an
+        // entirely empty row and prove nothing.
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        let tail: String = ((placement.col + agent_logo::LOGO_COLS)..(body.x + body.width))
+            .map(|x| buffer[(x, placement.row)].symbol())
+            .collect();
+        assert!(
+            !tail.trim().is_empty(),
+            "expected the agent label after the reserved cells, row tail was {tail:?}"
+        );
+    }
+
+    #[test]
+    fn placements_use_the_sidebar_rect_not_the_client_viewport() {
+        // The renderer lays the sidebar out inside app.view.sidebar_rect. If the
+        // collector measures a different width, truncation of the tokens before
+        // the icon differs and the image is placed away from the reserved cells
+        // — over live pane output, since Kitty z=0 draws above text.
+        use crate::config::AgentSidebarToken;
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.sidebar_agents.rows = vec![
+            vec![AgentSidebarToken::StateIcon, AgentSidebarToken::Workspace],
+            vec![AgentSidebarToken::Workspace, AgentSidebarToken::AgentIcon],
+        ];
+
+        let sidebar = Rect::new(0, 0, 8, 20);
+        app.view.sidebar_rect = sidebar;
+        let from_sidebar = agent_logo_placements(&app, &TerminalRuntimeRegistry::new(), sidebar);
+        let from_viewport = agent_logo_placements(
+            &app,
+            &TerminalRuntimeRegistry::new(),
+            Rect::new(0, 0, 120, 20),
+        );
+        assert_ne!(
+            from_sidebar, from_viewport,
+            "control: the two rects must actually produce different columns, \
+             otherwise this test cannot detect the bug"
+        );
+
+        // What the renderer reserved, measured from the rendered buffer.
+        let mut terminal = Terminal::new(TestBackend::new(sidebar.width, sidebar.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, sidebar))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let placement = from_sidebar[0];
+        for offset in 0..agent_logo::LOGO_COLS {
+            assert_eq!(
+                buffer[(placement.col + offset, placement.row)].symbol(),
+                " ",
+                "logo column {} does not match the cells the renderer reserved",
+                placement.col + offset
+            );
+        }
+    }
+
+    #[test]
+    fn no_logo_is_placed_when_the_sidebar_is_collapsed() {
+        // render_sidebar_collapsed draws no agent rows, so any placement here
+        // lands on the terminal pane beside the collapsed strip.
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.sidebar_collapsed = true;
+        assert!(agent_logo_placements(
+            &app,
+            &TerminalRuntimeRegistry::new(),
+            Rect::new(0, 0, 120, 20)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn no_logo_is_placed_in_mobile_layout() {
+        // Mobile owns the whole screen and renders no sidebar at all.
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.view.layout = crate::ui::ViewLayout::Mobile;
+        assert!(agent_logo_placements(
+            &app,
+            &TerminalRuntimeRegistry::new(),
+            Rect::new(0, 0, 120, 20)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn no_logo_is_placed_when_the_sidebar_has_no_width() {
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.view.sidebar_rect = Rect::default();
+        assert!(agent_logo_placements(
+            &app,
+            &TerminalRuntimeRegistry::new(),
+            Rect::new(0, 0, 120, 20)
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn no_logo_is_placed_when_the_host_cannot_draw_graphics() {
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.kitty_graphics_enabled = false;
+        let area = Rect::new(0, 0, 26, 20);
+        assert!(agent_logo_placements(&app, &TerminalRuntimeRegistry::new(), area).is_empty());
+    }
+
+    #[test]
+    fn no_logo_is_placed_when_the_setting_is_off() {
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.sidebar_agent_logos = false;
+        let area = Rect::new(0, 0, 26, 20);
+        assert!(agent_logo_placements(&app, &TerminalRuntimeRegistry::new(), area).is_empty());
+    }
+
+    #[test]
+    fn an_agent_without_a_mask_falls_back_to_its_name_instead_of_a_gap() {
+        // Kimi has no bundled logo. The row must still identify the agent
+        // rather than reserving cells nothing will ever draw into.
+        let app = app_with_logo_row(Agent::Kimi);
+        let area = Rect::new(0, 0, 26, 20);
+        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert!(
+            agent_logo_placements(&app, &TerminalRuntimeRegistry::new(), area).is_empty(),
+            "an agent with no mask must not claim a placement"
+        );
+
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        let row: String = (0..body.width)
+            .map(|x| buffer[(body.x + x, body.y + 1)].symbol())
+            .collect();
+        assert!(
+            row.to_lowercase().contains("kimi"),
+            "fallback row should name the agent, got {row:?}"
+        );
+    }
+
+    /// Render one agent entry and return its second row as text.
+    fn agent_row_text(app: &crate::app::state::AppState, area: Rect) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        (0..body.width)
+            .map(|x| buffer[(body.x + x, body.y + 1)].symbol())
+            .collect()
+    }
+
+    fn app_with_icon_and_name(agent: Agent) -> crate::app::state::AppState {
+        use crate::config::AgentSidebarToken;
+        let mut app = app_with_logo_row(agent);
+        app.sidebar_agents.rows = vec![
+            vec![AgentSidebarToken::StateIcon, AgentSidebarToken::Workspace],
+            vec![AgentSidebarToken::AgentIcon, AgentSidebarToken::Agent],
+        ];
+        app
+    }
+
+    #[test]
+    fn an_icon_beside_an_agent_token_shows_the_name_once() {
+        // Both tokens present and logos drawable: the logo occupies its cells
+        // and the name is printed exactly once, by the `agent` token.
+        let app = app_with_icon_and_name(Agent::Claude);
+        let row = agent_row_text(&app, Rect::new(0, 0, 26, 20)).to_lowercase();
+        assert_eq!(
+            row.matches("claude").count(),
+            1,
+            "expected the name exactly once, row was {row:?}"
+        );
+    }
+
+    #[test]
+    fn an_icon_beside_an_agent_token_does_not_double_the_name_without_graphics() {
+        // This is why the icon elides rather than falling back here: otherwise
+        // a terminal with no graphics support prints "claude claude".
+        let mut app = app_with_icon_and_name(Agent::Claude);
+        app.kitty_graphics_enabled = false;
+        let row = agent_row_text(&app, Rect::new(0, 0, 26, 20)).to_lowercase();
+        assert_eq!(
+            row.matches("claude").count(),
+            1,
+            "name should appear once, not doubled; row was {row:?}"
+        );
+    }
+
+    #[test]
+    fn a_lone_icon_still_names_the_agent_without_graphics() {
+        // With no `agent` token to carry it, the icon must supply the name or
+        // the row says nothing at all.
+        let mut app = app_with_logo_row(Agent::Claude);
+        app.kitty_graphics_enabled = false;
+        let row = agent_row_text(&app, Rect::new(0, 0, 26, 20)).to_lowercase();
+        assert!(
+            row.contains("claude"),
+            "lone icon should degrade to the name, row was {row:?}"
+        );
+    }
+
     #[test]
     fn default_space_workspace_style_tracks_active_state() {
         let mut app = crate::app::state::AppState::test_new();
@@ -1840,6 +2270,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 "##,
         )
         .unwrap();
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken {
                 kind: ResolvedTokenKind::GitStatus {
@@ -1855,6 +2286,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             Style::default(),
             &crate::app::state::AppState::test_new().palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         assert_eq!(
@@ -1872,6 +2305,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn tab_token_renders_with_teal_and_no_dim() {
         let palette = crate::app::state::AppState::test_new().palette;
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::Tab(
                 "logs".into(),
@@ -1885,6 +2319,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             Style::default(),
             &palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         let span = &spans[0];
@@ -1895,6 +2331,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn agent_token_renders_brand_color_for_known_brand() {
         let palette = crate::app::state::AppState::test_new().palette;
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
                 text: "claude".into(),
@@ -1909,6 +2346,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             Style::default(),
             &palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         let span = &spans[0];
@@ -1928,6 +2367,7 @@ rows = [[{ token = "agent", fg = "#123456" }]]
         )
         .unwrap();
         let palette = crate::app::state::AppState::test_new().palette;
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken {
                 kind: ResolvedTokenKind::Agent {
@@ -1945,6 +2385,8 @@ rows = [[{ token = "agent", fg = "#123456" }]]
             Style::default(),
             &palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         let span = &spans[0];
@@ -1961,6 +2403,7 @@ rows = [[{ token = "agent", fg = "#123456" }]]
     #[test]
     fn agent_token_renders_monochrome_brand_as_bold_text() {
         let palette = crate::app::state::AppState::test_new().palette;
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
                 text: "grok".into(),
@@ -1975,6 +2418,8 @@ rows = [[{ token = "agent", fg = "#123456" }]]
             Style::default(),
             &palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         let span = &spans[0];
@@ -1986,6 +2431,7 @@ rows = [[{ token = "agent", fg = "#123456" }]]
     #[test]
     fn agent_token_without_brand_keeps_secondary_style() {
         let palette = crate::app::state::AppState::test_new().palette;
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
                 text: "maki".into(),
@@ -2000,6 +2446,8 @@ rows = [[{ token = "agent", fg = "#123456" }]]
             Style::default(),
             &palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         let span = &spans[0];
@@ -2010,6 +2458,7 @@ rows = [[{ token = "agent", fg = "#123456" }]]
     #[test]
     fn agent_token_with_no_detected_agent_keeps_secondary_style() {
         let palette = crate::app::state::AppState::test_new().palette;
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::Agent {
                 text: "maki".into(),
@@ -2024,6 +2473,8 @@ rows = [[{ token = "agent", fg = "#123456" }]]
             Style::default(),
             &palette,
             20,
+            false,
+            &mut logo_column,
         );
 
         let span = &spans[0];
@@ -2117,6 +2568,7 @@ rows = [[{ token = "agent", fg = "#123456" }]]
         assert!(!rendered.contains('⠋'));
         assert!(rendered.contains('修') && rendered.contains('复'));
 
+        let mut logo_column = None;
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle(
                 "修复🙂标题很长".into(),
@@ -2128,6 +2580,8 @@ rows = [[{ token = "agent", fg = "#123456" }]]
             Style::default(),
             &app.palette,
             8,
+            false,
+            &mut logo_column,
         );
         let text = spans
             .iter()
