@@ -1,4 +1,6 @@
-use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig, ToastDelivery};
+use crate::config::{
+    Keybinds, NewTerminalCwdConfig, SoundConfig, TabBarPositionConfig, ToastConfig, ToastDelivery,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
 use ratatui::style::Color;
@@ -105,8 +107,10 @@ use crate::workspace::Workspace;
 pub struct Palette {
     /// Primary accent (highlight, active borders).
     pub accent: Color,
-    /// Background for floating panels, overlays, and modals.
+    /// Background for the tab bar, floating panels, overlays, and modals.
     pub panel_bg: Color,
+    /// Optional desktop sidebar background. Reset preserves the terminal background.
+    pub sidebar_bg: Color,
     /// Subtle surface background for selected/focused items.
     pub surface0: Color,
     /// Slightly lighter surface for hover/active states.
@@ -143,6 +147,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(137, 180, 250), // blue
             panel_bg: Color::Rgb(24, 24, 37),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(49, 50, 68),
             surface1: Color::Rgb(69, 71, 90),
             surface_dim: Color::Rgb(30, 30, 46),
@@ -165,6 +170,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(30, 102, 245),
             panel_bg: Color::Rgb(239, 241, 245),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(204, 208, 218),
             surface1: Color::Rgb(188, 192, 204),
             surface_dim: Color::Rgb(230, 233, 239),
@@ -187,6 +193,7 @@ impl Palette {
         Self {
             accent: Color::Blue,
             panel_bg: Color::Reset,
+            sidebar_bg: Color::Reset,
             surface0: Color::Reset,
             surface1: Color::DarkGray,
             surface_dim: Color::DarkGray,
@@ -209,6 +216,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(122, 162, 247), // blue
             panel_bg: Color::Rgb(26, 27, 38),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(36, 40, 59),
             surface1: Color::Rgb(65, 72, 104),
             surface_dim: Color::Rgb(26, 27, 38),
@@ -231,6 +239,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(46, 125, 233),
             panel_bg: Color::Rgb(225, 226, 231),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(196, 200, 218),
             surface1: Color::Rgb(168, 174, 203),
             surface_dim: Color::Rgb(210, 211, 218),
@@ -253,6 +262,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(189, 147, 249), // purple
             panel_bg: Color::Rgb(40, 42, 54),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(68, 71, 90),
             surface1: Color::Rgb(98, 114, 164),
             surface_dim: Color::Rgb(40, 42, 54),
@@ -275,6 +285,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(136, 192, 208), // frost
             panel_bg: Color::Rgb(46, 52, 64),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(59, 66, 82),
             surface1: Color::Rgb(67, 76, 94),
             surface_dim: Color::Rgb(46, 52, 64),
@@ -297,6 +308,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(215, 153, 33), // yellow
             panel_bg: Color::Rgb(40, 40, 40),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(60, 56, 54),
             surface1: Color::Rgb(80, 73, 69),
             surface_dim: Color::Rgb(40, 40, 40),
@@ -319,6 +331,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(7, 102, 120),
             panel_bg: Color::Rgb(251, 241, 199),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(235, 219, 178),
             surface1: Color::Rgb(213, 196, 161),
             surface_dim: Color::Rgb(242, 229, 188),
@@ -341,6 +354,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(97, 175, 239), // blue
             panel_bg: Color::Rgb(40, 44, 52),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(44, 49, 58),
             surface1: Color::Rgb(62, 68, 81),
             surface_dim: Color::Rgb(40, 44, 52),
@@ -363,6 +377,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(64, 120, 242),
             panel_bg: Color::Rgb(250, 250, 250),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(240, 240, 241),
             surface1: Color::Rgb(229, 229, 230),
             surface_dim: Color::Rgb(245, 245, 246),
@@ -385,6 +400,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(38, 139, 210), // blue
             panel_bg: Color::Rgb(0, 43, 54),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(7, 54, 66),
             surface1: Color::Rgb(88, 110, 117),
             surface_dim: Color::Rgb(0, 43, 54),
@@ -407,6 +423,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(38, 139, 210),
             panel_bg: Color::Rgb(253, 246, 227),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(238, 232, 213),
             surface1: Color::Rgb(147, 161, 161),
             surface_dim: Color::Rgb(238, 232, 213),
@@ -429,6 +446,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(126, 156, 216), // blue
             panel_bg: Color::Rgb(31, 31, 40),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(42, 42, 55),
             surface1: Color::Rgb(54, 54, 70),
             surface_dim: Color::Rgb(31, 31, 40),
@@ -451,6 +469,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(77, 105, 155),
             panel_bg: Color::Rgb(242, 236, 188),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(220, 213, 172),
             surface1: Color::Rgb(201, 203, 209),
             surface_dim: Color::Rgb(213, 206, 163),
@@ -473,9 +492,10 @@ impl Palette {
         Self {
             accent: Color::Rgb(196, 167, 231), // iris
             panel_bg: Color::Rgb(25, 23, 36),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(31, 29, 46),
             surface1: Color::Rgb(38, 35, 58),
-            surface_dim: Color::Rgb(25, 23, 36),
+            surface_dim: Color::Rgb(38, 35, 58),
             overlay0: Color::Rgb(110, 106, 134),
             overlay1: Color::Rgb(144, 140, 170),
             text: Color::Rgb(224, 222, 244),
@@ -495,6 +515,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(144, 122, 169),
             panel_bg: Color::Rgb(250, 244, 237),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(242, 233, 225),
             surface1: Color::Rgb(255, 250, 243),
             surface_dim: Color::Rgb(242, 233, 225),
@@ -517,6 +538,7 @@ impl Palette {
         Self {
             accent: Color::Rgb(255, 199, 153),
             panel_bg: Color::Rgb(26, 26, 26),
+            sidebar_bg: Color::Reset,
             surface0: Color::Rgb(35, 35, 35),
             surface1: Color::Rgb(40, 40, 40),
             surface_dim: Color::Rgb(16, 16, 16),
@@ -578,6 +600,9 @@ impl Palette {
         Self {
             accent: rgb(c[0]),
             panel_bg: rgb(c[1]),
+            // Generated themes carry no dedicated sidebar background; match the
+            // built-in themes and leave it to the terminal until overridden.
+            sidebar_bg: Color::Reset,
             surface0: rgb(c[2]),
             surface1: rgb(c[3]),
             surface_dim: rgb(c[4]),
@@ -603,6 +628,9 @@ impl Palette {
         }
         if let Some(c) = &custom.panel_bg {
             self.panel_bg = parse_color(c);
+        }
+        if let Some(c) = &custom.sidebar_bg {
+            self.sidebar_bg = parse_color(c);
         }
         if let Some(c) = &custom.surface0 {
             self.surface0 = parse_color(c);
@@ -850,6 +878,10 @@ pub enum Mode {
 }
 
 impl Mode {
+    pub(crate) fn mouse_motion_changes_view(self) -> bool {
+        matches!(self, Self::GlobalMenu | Self::ContextMenu | Self::Navigator)
+    }
+
     /// Whether keys in this mode are commands/navigation (an ASCII input source is wanted) rather
     /// than free text. This is an explicit **allowlist** of the prefix command/navigation realm:
     /// any mode NOT listed defaults to leaving the user's IME alone (the safe default), so adding a
@@ -857,8 +889,9 @@ impl Mode {
     /// `sync_prefix_input_source` (gated by `switch_ascii_input_source_in_prefix`) so multi-level
     /// prefix commands keep ASCII until they return to the terminal.
     ///
-    /// Known limitation: `Navigator`'s search box is also held on ASCII, since this `Mode`-level
-    /// predicate can't see `search_focused` (non-ASCII filtering there would need a runtime check).
+    /// Known limitation: the search boxes in `Navigator` and `KeybindHelp` are also held on ASCII,
+    /// since this `Mode`-level predicate can't see `search_focused` (non-ASCII filtering there
+    /// would need a runtime check).
     pub(crate) fn wants_ascii_input(self) -> bool {
         matches!(
             self,
@@ -1020,59 +1053,31 @@ pub enum AgentPanelSort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Theme,
+    Indicators,
     Sound,
     Toast,
     PaneLabels,
-    Experiments,
     Integrations,
 }
 
 impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::Theme,
+        Self::Indicators,
         Self::Sound,
         Self::Toast,
         Self::PaneLabels,
         Self::Integrations,
-        Self::Experiments,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::Indicators => "indicators",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
-            Self::Experiments => "experiments",
             Self::Integrations => "integrations",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExperimentSetting {
-    PaneHistory,
-    SwitchAsciiInputSourceInPrefix,
-}
-
-impl ExperimentSetting {
-    pub(crate) const ALL: [Self; 2] = [Self::PaneHistory, Self::SwitchAsciiInputSourceInPrefix];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::PaneHistory => "pane screen history",
-            Self::SwitchAsciiInputSourceInPrefix => {
-                "switch to ascii input source in prefix (macOS)"
-            }
-        }
-    }
-
-    pub(crate) fn enabled(self, state: &AppState) -> bool {
-        match self {
-            Self::PaneHistory => state.pane_history_persistence_enabled(),
-            Self::SwitchAsciiInputSourceInPrefix => {
-                state.switch_ascii_input_source_in_prefix_enabled()
-            }
         }
     }
 }
@@ -1189,10 +1194,16 @@ pub struct SettingsState {
     pub theme_filter: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkspaceDropTarget {
+    Before(usize),
+    End,
+}
+
 pub(crate) enum DragTarget {
     WorkspaceReorder {
         source_ws_idx: usize,
-        insert_idx: Option<usize>,
+        drop_target: Option<WorkspaceDropTarget>,
     },
     TabReorder {
         ws_idx: usize,
@@ -1434,8 +1445,11 @@ pub struct ProductAnnouncementState {
     pub preview: bool,
 }
 
+#[derive(Default)]
 pub struct KeybindHelpState {
     pub scroll: u16,
+    pub query: String,
+    pub search_focused: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1544,6 +1558,7 @@ pub struct AppState {
     /// Ratio of sidebar height allocated to the workspaces section.
     pub sidebar_section_split: f32,
     pub agent_panel_sort: AgentPanelSort,
+    pub status_indicators: crate::config::StatusIndicatorStyle,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -1561,9 +1576,11 @@ pub struct AppState {
     pub prompt_new_tab_name: bool,
     pub prompt_new_workspace_name: bool,
     pub pane_borders: bool,
+    pub pane_scrollbars: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
     pub hide_tab_bar_when_single_tab: bool,
+    pub tab_bar_position: TabBarPositionConfig,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
@@ -1590,8 +1607,6 @@ pub struct AppState {
     pub local_sound_playback: bool,
     pub toast_config: ToastConfig,
     pub keybinds: Keybinds,
-    /// Frame counter for spinner animations (wraps around).
-    pub spinner_tick: u32,
     /// UI color palette — all sidebar/UI colors centralized for theming.
     pub palette: Palette,
     /// Currently applied theme name (for settings UI).
@@ -1662,14 +1677,6 @@ impl AppState {
         self.show_agent_labels_on_pane_borders
     }
 
-    pub fn pane_history_persistence_enabled(&self) -> bool {
-        self.pane_history_persistence
-    }
-
-    pub fn switch_ascii_input_source_in_prefix_enabled(&self) -> bool {
-        self.switch_ascii_input_source_in_prefix
-    }
-
     pub(crate) fn pane_exposes_host_cursor(
         &self,
         _ws_idx: usize,
@@ -1731,7 +1738,7 @@ impl AppState {
             || self.focused_pane_requests_mouse_capture_from(terminal_runtimes)
     }
 
-    pub fn is_prefix_key(&self, key: crate::input::TerminalKey) -> bool {
+    pub fn is_prefix_key(&self, key: &crate::input::TerminalKey) -> bool {
         crate::config::terminal_key_matches_combo(key, (self.prefix_code, self.prefix_mods))
     }
 
@@ -1828,7 +1835,7 @@ pub fn key_matches(
     expected_mods: KeyModifiers,
 ) -> bool {
     crate::config::terminal_key_matches_combo(
-        crate::input::TerminalKey::from(*key),
+        &crate::input::TerminalKey::from(*key),
         (expected_code, expected_mods),
     )
 }
@@ -1880,7 +1887,7 @@ impl AppState {
             name_input_replace_on_type: false,
             release_notes: None,
             product_announcement: None,
-            keybind_help: KeybindHelpState { scroll: 0 },
+            keybind_help: KeybindHelpState::default(),
             navigator: NavigatorState::default(),
             copy_mode: None,
             workspace_scroll: 0,
@@ -1932,6 +1939,7 @@ impl AppState {
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
             agent_panel_sort: AgentPanelSort::Spaces,
+            status_indicators: crate::config::StatusIndicatorStyle::Dots,
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
@@ -1946,9 +1954,11 @@ impl AppState {
             prompt_new_tab_name: true,
             prompt_new_workspace_name: false,
             pane_borders: true,
+            pane_scrollbars: true,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            tab_bar_position: TabBarPositionConfig::Top,
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,
@@ -1968,7 +1978,6 @@ impl AppState {
             local_sound_playback: false,
             toast_config: ToastConfig::default(),
             keybinds: Keybinds::default(),
-            spinner_tick: 0,
             palette: Palette::catppuccin(),
             theme_name: "catppuccin".to_string(),
             theme_runtime: ThemeRuntimeConfig {
@@ -2266,16 +2275,11 @@ impl AppState {
             match &drag.target {
                 DragTarget::WorkspaceReorder {
                     source_ws_idx,
-                    insert_idx,
+                    drop_target,
                 } => {
                     assert_workspace_index(*source_ws_idx, "workspace drag source");
-                    if let Some(insert_idx) = insert_idx {
-                        assert!(
-                            *insert_idx <= self.workspaces.len(),
-                            "workspace drag insert index {} out of bounds for {} workspaces",
-                            insert_idx,
-                            self.workspaces.len()
-                        );
+                    if let Some(WorkspaceDropTarget::Before(ws_idx)) = drop_target {
+                        assert_workspace_index(*ws_idx, "workspace drag target");
                     }
                 }
                 DragTarget::TabReorder {
@@ -2480,6 +2484,31 @@ mod tests {
                 "theme should resolve: {name}"
             );
         }
+    }
+
+    #[test]
+    fn built_in_themes_leave_sidebar_background_unset() {
+        for name in THEME_NAMES {
+            let palette = Palette::from_name(name).unwrap();
+            assert_eq!(
+                palette.sidebar_bg,
+                Color::Reset,
+                "built-in theme changed the sidebar background: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_sidebar_background_overrides_the_default() {
+        let custom = crate::config::CustomThemeColors {
+            sidebar_bg: Some("#181825".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            Palette::catppuccin().with_overrides(&custom).sidebar_bg,
+            Color::Rgb(24, 24, 37)
+        );
     }
 
     #[test]

@@ -238,6 +238,7 @@ dark_name = "catppuccin"
 
 ```toml
 [theme.custom]
+sidebar_bg = "#181825"
 panel_bg = "reset"
 accent = "#a6e3a1"
 green = "#a6e3a1"
@@ -245,6 +246,8 @@ blue = "#89b4fa"
 red = "#f38ba8"
 yellow = "#f9e2af"
 ```
+
+`sidebar_bg` を使うと、デスクトップのサイドバーだけに背景色を設定できます。省略した場合、サイドバーはホストターミナルの背景を使います。
 
 色の値には、hex、名前付きの色、`rgb(r,g,b)`、または `reset`、`default`、`none`、`transparent` のようなリセットエイリアスが使えます。
 
@@ -367,6 +370,8 @@ position = "bottom-right"
 
 アプリ内トーストには `herdr`、SSH 越しでも使いやすい外側のターミナル通知には `terminal`、ローカル OS の通知サービスには `system`、ポップアップを無効にするには `off` を選びます。Herdr はアクティブなタブのポップアップを抑制します。位置、遅延の挙動、クリップボードのフィードバック設定については、[設定リファレンス](/docs/config-reference/)で `ui.toast` を検索してください。
 
+macOS では、`system` は最初に `terminal-notifier` を試し、利用できない場合や失敗した場合は `/usr/bin/osascript` にフォールバックします。このフォールバックは通知センターで Script Editor として表示され、ホストターミナルをアクティブにできません。`brew install terminal-notifier` で `terminal-notifier` をインストールできます。対応するターミナルを Herdr が検出できた場合、通知のクリック時にそのターミナルアプリをアクティブにできます。または、`terminal` を選んで対応する外側のターミナルに通知を送信させてください。
+
 ## サウンド
 
 サウンド通知はローカルの Herdr クライアントで再生されます。カスタムサウンドは mp3 ファイルでなければなりません。相対パスは設定ファイルのディレクトリから解決されます。
@@ -428,14 +433,18 @@ cjk_ime_agents = ["claude", "pi", "codex"]
 
 ## プレフィックス入力ソースの切り替え
 
-macOS では、プレフィックスコマンドとプレフィックスから起動したモードがアクティブな間、Herdr がシステムの ASCII 対応入力ソースへ一時的に切り替えるようにできます:
+macOS と Windows では、プレフィックスコマンドとプレフィックスから起動したモードがアクティブな間、Herdr が ASCII 対応の入力ソースへ一時的に切り替えるようにできます:
 
 ```toml
 [experimental]
 switch_ascii_input_source_in_prefix = true
 ```
 
-ターミナル入力に戻るかテキストフィールドに入ると、Herdr は以前の入力ソースを復元します。この設定は他のプラットフォームには影響しません。
+macOS ではその時点の ASCII 対応キーボードレイアウトへ切り替えます。Windows では IME を英語（ASCII）入力へ切り替えます。ターミナル入力に戻るかテキストフィールドに入ると、Herdr は以前の入力ソースを復元します。この設定は他のプラットフォームには影響しません。
+
+:::caution[Windows では韓国語 IME のみ対応]
+Windows でのサポートは現時点で韓国語 IME に限定されています。それ以外の言語の IME を使用している場合、この設定は入力ソースを変更しません。
+:::
 
 ## 環境変数
 
