@@ -58,6 +58,7 @@ masks! {
     Droid => "droid",
     Gemini => "gemini",
     GithubCopilot => "githubcopilot",
+    Grok => "grok",
     Omp => "omp",
     OpenCode => "opencode",
     Pi => "pi",

@@ -13,6 +13,12 @@ use crate::selection::Selection;
 pub(crate) type InstalledPluginRegistry =
     std::collections::HashMap<String, crate::api::schema::InstalledPluginInfo>;
 
+/// Number of distinct frames in the working-state spinner cycle.
+///
+/// `crate::ui::status::WORKING_SPINNER_FRAMES` holds the glyphs and is asserted
+/// against this constant in its own tests.
+pub const SPINNER_FRAME_COUNT: u8 = 10;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PluginPaneRecord {
     pub plugin_id: String,
@@ -1508,6 +1514,9 @@ pub struct AppState {
     pub sidebar_section_split: f32,
     pub agent_panel_sort: AgentPanelSort,
     pub status_indicators: crate::config::StatusIndicatorStyle,
+    /// Current frame of the working-state spinner. Only advances while
+    /// `status_indicators` is animated and at least one agent is working.
+    pub spinner_frame: u8,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -1618,6 +1627,35 @@ impl AppState {
 
     pub fn sound_enabled(&self) -> bool {
         self.sound.enabled
+    }
+
+    /// True when any pane the sidebar can draw is currently in
+    /// `AgentState::Working`.
+    ///
+    /// This walks workspaces -> tabs -> panes -> terminals rather than scanning
+    /// `self.terminals` directly, so it sees exactly the panes the sidebar
+    /// renders (`Workspace::aggregate_state` and `Workspace::pane_details` use
+    /// the same walk). A terminal that is not attached to any pane is never
+    /// drawn and must not keep the spinner tick alive.
+    pub fn any_agent_working(&self) -> bool {
+        self.workspaces
+            .iter()
+            .flat_map(|ws| ws.tabs.iter())
+            .flat_map(|tab| tab.panes.values())
+            .any(|pane| {
+                self.terminals
+                    .get(&pane.attached_terminal_id)
+                    .is_some_and(|terminal| terminal.state == AgentState::Working)
+            })
+    }
+
+    /// Advance the working-state spinner by one frame.
+    ///
+    /// Wraps on [`SPINNER_FRAME_COUNT`] rather than on `u8::MAX` so the cycle
+    /// stays even; wrapping at 256 would skip frames every 256 ticks because
+    /// 256 is not a multiple of the frame count.
+    pub fn advance_spinner_frame(&mut self) {
+        self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAME_COUNT;
     }
 
     pub fn toast_delivery(&self) -> ToastDelivery {
@@ -1891,6 +1929,7 @@ impl AppState {
             sidebar_section_split: 0.5,
             agent_panel_sort: AgentPanelSort::Spaces,
             status_indicators: crate::config::StatusIndicatorStyle::Dots,
+            spinner_frame: 0,
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),

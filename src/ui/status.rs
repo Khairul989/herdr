@@ -193,10 +193,17 @@ pub(super) fn render_config_diagnostic(frame: &mut Frame, area: Rect, message: &
     }
 }
 
+/// Spinner frames drawn for `AgentState::Working` under
+/// `StatusIndicatorStyle::Animated`. All frames are single-cell braille so the
+/// row layout never shifts between frames.
+pub(crate) const WORKING_SPINNER_FRAMES: [&str; 10] =
+    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 pub(super) fn state_icon_symbol(
     state: AgentState,
     seen: bool,
     indicator_style: StatusIndicatorStyle,
+    spinner_frame: u8,
 ) -> &'static str {
     match (indicator_style, state, seen) {
         (StatusIndicatorStyle::Dots, AgentState::Blocked, _) => "●",
@@ -204,11 +211,32 @@ pub(super) fn state_icon_symbol(
         (StatusIndicatorStyle::Dots, AgentState::Idle, false) => "●",
         (StatusIndicatorStyle::Dots, AgentState::Idle, true) => "○",
         (StatusIndicatorStyle::Dots, AgentState::Unknown, _) => "·",
-        (StatusIndicatorStyle::Symbols, AgentState::Blocked, _) => "×",
+        (StatusIndicatorStyle::Animated, AgentState::Working, _) => {
+            WORKING_SPINNER_FRAMES[spinner_frame as usize % WORKING_SPINNER_FRAMES.len()]
+        }
+        // Every non-working state under `Animated` reuses the `Symbols` glyphs;
+        // only the working state animates.
+        (
+            StatusIndicatorStyle::Symbols | StatusIndicatorStyle::Animated,
+            AgentState::Blocked,
+            _,
+        ) => "×",
         (StatusIndicatorStyle::Symbols, AgentState::Working, _) => "◐",
-        (StatusIndicatorStyle::Symbols, AgentState::Idle, false) => "✓",
-        (StatusIndicatorStyle::Symbols, AgentState::Idle, true) => "○",
-        (StatusIndicatorStyle::Symbols, AgentState::Unknown, _) => "·",
+        (
+            StatusIndicatorStyle::Symbols | StatusIndicatorStyle::Animated,
+            AgentState::Idle,
+            false,
+        ) => "✓",
+        (
+            StatusIndicatorStyle::Symbols | StatusIndicatorStyle::Animated,
+            AgentState::Idle,
+            true,
+        ) => "○",
+        (
+            StatusIndicatorStyle::Symbols | StatusIndicatorStyle::Animated,
+            AgentState::Unknown,
+            _,
+        ) => "·",
     }
 }
 
@@ -216,10 +244,11 @@ pub(super) fn state_icon(
     state: AgentState,
     seen: bool,
     indicator_style: StatusIndicatorStyle,
+    spinner_frame: u8,
     p: &Palette,
 ) -> (&'static str, Style) {
     (
-        state_icon_symbol(state, seen, indicator_style),
+        state_icon_symbol(state, seen, indicator_style, spinner_frame),
         Style::default().fg(state_label_color(state, seen, p)),
     )
 }
@@ -271,6 +300,9 @@ mod tests {
         for (indicator_style, expected_symbols) in [
             (StatusIndicatorStyle::Dots, ["●", "●", "●", "○", "·"]),
             (StatusIndicatorStyle::Symbols, ["×", "◐", "✓", "○", "·"]),
+            // Animated reuses the Symbols glyphs everywhere except Working,
+            // which is asserted separately across the whole frame cycle below.
+            (StatusIndicatorStyle::Animated, ["×", "⠋", "✓", "○", "·"]),
         ] {
             for ((state, seen, color), expected_symbol) in [
                 (AgentState::Blocked, true, palette.red),
@@ -282,10 +314,106 @@ mod tests {
             .into_iter()
             .zip(expected_symbols)
             {
-                let (actual_symbol, style) = state_icon(state, seen, indicator_style, &palette);
+                let (actual_symbol, style) = state_icon(state, seen, indicator_style, 0, &palette);
                 assert_eq!(actual_symbol, expected_symbol);
                 assert_eq!(display_width_u16(actual_symbol), 1);
                 assert_eq!(style.fg, Some(color));
+            }
+        }
+    }
+
+    #[test]
+    fn spinner_frame_table_matches_state_frame_count() {
+        assert_eq!(
+            WORKING_SPINNER_FRAMES.len(),
+            crate::app::state::SPINNER_FRAME_COUNT as usize,
+            "AppState::advance_spinner_frame wraps on SPINNER_FRAME_COUNT; a mismatch \
+             would make the cycle skip or repeat glyphs"
+        );
+    }
+
+    #[test]
+    fn animated_working_advances_through_every_frame_and_wraps() {
+        let palette = Palette::catppuccin();
+        let cycle: Vec<&str> = (0..WORKING_SPINNER_FRAMES.len() as u8)
+            .map(|frame| {
+                state_icon_symbol(
+                    AgentState::Working,
+                    true,
+                    StatusIndicatorStyle::Animated,
+                    frame,
+                )
+            })
+            .collect();
+
+        assert_eq!(cycle, WORKING_SPINNER_FRAMES.to_vec());
+
+        // Every frame must occupy exactly one cell, otherwise the sidebar row
+        // layout would shift as the spinner turns.
+        for symbol in &cycle {
+            assert_eq!(display_width_u16(symbol), 1, "frame {symbol} is not 1 cell");
+        }
+
+        // An out-of-range frame must wrap rather than panic.
+        assert_eq!(
+            state_icon_symbol(
+                AgentState::Working,
+                true,
+                StatusIndicatorStyle::Animated,
+                u8::MAX,
+            ),
+            WORKING_SPINNER_FRAMES[u8::MAX as usize % WORKING_SPINNER_FRAMES.len()]
+        );
+
+        // Colour is unchanged by the animation.
+        let (_, style) = state_icon(
+            AgentState::Working,
+            true,
+            StatusIndicatorStyle::Animated,
+            3,
+            &palette,
+        );
+        assert_eq!(style.fg, Some(palette.yellow));
+    }
+
+    #[test]
+    fn spinner_frame_only_changes_the_working_glyph() {
+        for state_and_seen in [
+            (AgentState::Blocked, true),
+            (AgentState::Idle, false),
+            (AgentState::Idle, true),
+            (AgentState::Unknown, true),
+        ] {
+            let (state, seen) = state_and_seen;
+            let first = state_icon_symbol(state, seen, StatusIndicatorStyle::Animated, 0);
+            for frame in 1..WORKING_SPINNER_FRAMES.len() as u8 {
+                assert_eq!(
+                    state_icon_symbol(state, seen, StatusIndicatorStyle::Animated, frame),
+                    first,
+                    "{state:?} (seen={seen}) must not animate"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn static_styles_ignore_the_spinner_frame() {
+        for indicator_style in [StatusIndicatorStyle::Dots, StatusIndicatorStyle::Symbols] {
+            for (state, seen) in [
+                (AgentState::Blocked, true),
+                (AgentState::Working, true),
+                (AgentState::Idle, false),
+                (AgentState::Idle, true),
+                (AgentState::Unknown, true),
+            ] {
+                let first = state_icon_symbol(state, seen, indicator_style, 0);
+                for frame in 1..WORKING_SPINNER_FRAMES.len() as u8 {
+                    assert_eq!(
+                        state_icon_symbol(state, seen, indicator_style, frame),
+                        first,
+                        "{indicator_style:?} must be static"
+                    );
+                }
             }
         }
     }
