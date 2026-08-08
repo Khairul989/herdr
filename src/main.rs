@@ -58,7 +58,6 @@ mod agent_resume;
 mod api;
 mod app;
 mod build_info;
-#[cfg(not(windows))]
 mod checksum;
 mod cli;
 mod client;
@@ -94,6 +93,7 @@ mod server;
 mod session;
 mod sound;
 mod terminal;
+mod terminal_effects;
 mod terminal_modes;
 mod terminal_notify;
 mod terminal_theme;

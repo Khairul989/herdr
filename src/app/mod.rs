@@ -4385,6 +4385,7 @@ mod tests {
                 ratio: None,
                 cwd: None,
                 focus: false,
+                right_click: Default::default(),
                 env: Default::default(),
             }),
         });
@@ -4465,6 +4466,7 @@ mod tests {
                 ratio: None,
                 cwd: None,
                 focus: true,
+                right_click: Default::default(),
                 env: Default::default(),
             }),
         });
@@ -4511,6 +4513,7 @@ mod tests {
                 ratio: Some(0.333),
                 cwd: None,
                 focus: false,
+                right_click: crate::api::schema::PaneRightClickTarget::Pane,
                 env: Default::default(),
             }),
         });
@@ -4522,6 +4525,14 @@ mod tests {
             .splits(ratatui::layout::Rect::new(0, 0, 100, 20));
         assert_eq!(splits.len(), 1);
         assert!((splits[0].ratio - 0.333).abs() < f32::EPSILON);
+        let response_pane_id = response["result"]["pane"]["pane_id"].as_str().unwrap();
+        let (_, response_pane_id) = app.parse_pane_id(response_pane_id).unwrap();
+        assert!(
+            app.state.workspaces[0]
+                .pane_state(response_pane_id)
+                .unwrap()
+                .right_click_passthrough
+        );
 
         let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
         for (_terminal_id, runtime) in runtimes {
@@ -4557,6 +4568,7 @@ mod tests {
                 ratio: None,
                 cwd: None,
                 focus: false,
+                right_click: Default::default(),
                 env: Default::default(),
             }),
         });
