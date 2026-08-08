@@ -35,23 +35,24 @@ alpha channel. It fails if any mask rasterizes empty.
 
 ## Coverage
 
-Masks exist for 11 of the 21 variants in `detect::Agent`:
+Masks exist for 12 of the 21 variants in `detect::Agent`:
 
-| mask | `detect::Agent` |
-| --- | --- |
-| `amp` | `Amp` |
-| `antigravity` | `Antigravity` |
-| `claude` | `Claude` |
-| `codex` | `Codex` |
-| `cursor` | `Cursor` |
-| `droid` | `Droid` |
-| `gemini` | `Gemini` |
-| `githubcopilot` | `GithubCopilot` |
-| `omp` | `Omp` |
-| `opencode` | `OpenCode` |
-| `pi` | `Pi` |
+| mask | `detect::Agent` | source |
+| --- | --- | --- |
+| `amp` | `Amp` | Warp monochrome silhouette |
+| `antigravity` | `Antigravity` | Warp monochrome silhouette |
+| `claude` | `Claude` | Warp monochrome silhouette |
+| `codex` | `Codex` | Warp monochrome silhouette |
+| `cursor` | `Cursor` | Warp monochrome silhouette |
+| `droid` | `Droid` | Warp monochrome silhouette |
+| `gemini` | `Gemini` | Warp monochrome silhouette |
+| `githubcopilot` | `GithubCopilot` | Warp monochrome silhouette |
+| `grok` | `Grok` | `website/assets/agent-icons/grok.svg` (xAI mark) |
+| `omp` | `Omp` | Warp monochrome silhouette |
+| `opencode` | `OpenCode` | Warp monochrome silhouette |
+| `pi` | `Pi` | Warp monochrome silhouette |
 
-The remaining agents — `Cline`, `Devin`, `Grok`, `Hermes`, `Kilo`, `Kimi`,
-`Kiro`, `Maki`, `Mastracode`, `Qodercli` — have no mask and fall back to the
+The remaining agents — `Cline`, `Devin`, `Hermes`, `Kilo`, `Kimi`, `Kiro`,
+`Maki`, `Mastracode`, `Qodercli` — have no mask and fall back to the
 brand-colored text token. Adding a mask named after the lowercased variant is
 enough to light one up; see `agent_logo_mask` in `src/ui/sidebar/agent_logo.rs`.

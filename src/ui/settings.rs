@@ -120,10 +120,11 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 frame,
                 content_area,
                 "agent status indicators",
-                "choose color dots or distinct symbols for each state",
+                "choose color dots, distinct symbols, or an animated working spinner",
                 &[
                     ("color dots  ● ● ● ○ ·", StatusIndicatorStyle::Dots),
                     ("distinct symbols  × ◐ ✓ ○ ·", StatusIndicatorStyle::Symbols),
+                    ("animated  × ⠹ ✓ ○ ·", StatusIndicatorStyle::Animated),
                 ],
                 app.status_indicators,
                 app.settings.list.selected,

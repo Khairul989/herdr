@@ -785,7 +785,13 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             break;
         }
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_icon(agg_state, agg_seen, app.status_indicators, p);
+        let (icon, icon_style) = state_icon(
+            agg_state,
+            agg_seen,
+            app.status_indicators,
+            app.spinner_frame,
+            p,
+        );
         let is_selected = visible_idx == app.selected && is_navigating;
         let is_active = Some(visible_idx) == app.active;
         let row_style = if is_selected {
@@ -851,8 +857,13 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             } else {
                 Style::default().fg(p.overlay0)
             };
-            let (icon, icon_style) =
-                state_icon(detail.state, detail.seen, app.status_indicators, p);
+            let (icon, icon_style) = state_icon(
+                detail.state,
+                detail.seen,
+                app.status_indicators,
+                app.spinner_frame,
+                p,
+            );
 
             if is_active {
                 let buf = frame.buffer_mut();
@@ -1042,12 +1053,20 @@ pub(crate) fn agent_logo_placements(
             break;
         }
 
-        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
+        let state_icon = state_icon(
+            detail.state,
+            detail.seen,
+            app.status_indicators,
+            app.spinner_frame,
+            p,
+        );
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let prefix = if row_index == 0 { 1u16 } else { 3 };
             let mut logo_column = None;
             // Styles do not affect widths, so only the state icon (which is
-            // measured) has to match the renderer exactly.
+            // measured) has to match the renderer exactly. The spinner frame
+            // carried in `state_icon` is irrelevant here because every frame is
+            // exactly one cell wide, so no frame can shift a placement.
             let _ = resolved_token_spans(
                 resolved,
                 state_icon,
@@ -1502,7 +1521,13 @@ fn render_workspace_list(
             .filter(|(_, collapsed)| *collapsed)
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_icon(display_state, display_seen, app.status_indicators, p);
+        let state_icon = state_icon(
+            display_state,
+            display_seen,
+            app.status_indicators,
+            app.spinner_frame,
+            p,
+        );
         let state_text_style = Style::default()
             .fg(state_label_color(display_state, display_seen, p))
             .add_modifier(Modifier::DIM);
@@ -1719,7 +1744,13 @@ fn render_agent_detail(
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        let state_icon = state_icon(detail.state, detail.seen, app.status_indicators, p);
+        let state_icon = state_icon(
+            detail.state,
+            detail.seen,
+            app.status_indicators,
+            app.spinner_frame,
+            p,
+        );
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
@@ -1899,6 +1930,104 @@ mod tests {
         assert!(agent_style.add_modifier.contains(Modifier::DIM));
         assert!(!agent_style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(agent_style.bg, Some(app.palette.surface_dim));
+    }
+
+    /// End-to-end proof that the spinner reaches the drawn buffer.
+    ///
+    /// The symbol-table tests in `ui::status` only prove the lookup is correct;
+    /// they say nothing about whether each sidebar surface actually passes
+    /// `spinner_frame` through. The invariant asserted here is stronger than
+    /// "a spinner appears": *every* spinner cell anywhere in the buffer must be
+    /// the current frame. A render site that hardcodes or staler a frame draws a
+    /// different braille glyph, which is still a spinner glyph, so a mere
+    /// "contains" check would miss it while this comparison catches it.
+    #[test]
+    fn animated_style_draws_the_current_spinner_frame_in_the_sidebar() {
+        use super::super::status::WORKING_SPINNER_FRAMES;
+
+        let build_app = |frame: u8| {
+            let mut app = crate::app::state::AppState::test_new();
+            let workspace = Workspace::test_new("one");
+            let pane_id = workspace.tabs[0].root_pane;
+            app.workspaces = vec![workspace];
+            app.ensure_test_terminals();
+            app.active = Some(0);
+            app.status_indicators = crate::config::StatusIndicatorStyle::Animated;
+            app.spinner_frame = frame;
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal_state.detected_agent = Some(Agent::Pi);
+            terminal_state.state = AgentState::Working;
+            // The spaces list draws from `view.workspace_card_areas`, which only
+            // compute_view populates. Without this the spaces section renders
+            // empty and never exercises its own state_icon call site.
+            crate::ui::compute_view(&mut app, Rect::new(0, 0, 100, 30));
+            app
+        };
+
+        let area = Rect::new(0, 0, 26, 20);
+        let draw = |app: &crate::app::state::AppState, collapsed: bool| {
+            let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+            terminal
+                .draw(|frame| {
+                    if collapsed {
+                        render_sidebar_collapsed(app, frame, area);
+                    } else {
+                        render_sidebar(app, &TerminalRuntimeRegistry::new(), frame, area);
+                    }
+                })
+                .unwrap();
+            terminal.backend().buffer().clone()
+        };
+
+        /// Every spinner glyph found in the buffer, in row-major order.
+        fn spinner_cells(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+            buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol().to_string())
+                .filter(|symbol| {
+                    super::super::status::WORKING_SPINNER_FRAMES.contains(&symbol.as_str())
+                })
+                .collect()
+        }
+
+        for collapsed in [false, true] {
+            for (frame, expected) in WORKING_SPINNER_FRAMES.iter().enumerate() {
+                let app = build_app(frame as u8);
+                let buffer = draw(&app, collapsed);
+                let drawn = spinner_cells(&buffer);
+
+                assert!(
+                    !drawn.is_empty(),
+                    "collapsed={collapsed} frame={frame}: no spinner drawn at all"
+                );
+                for symbol in &drawn {
+                    assert_eq!(
+                        symbol, expected,
+                        "collapsed={collapsed}: a render site drew {symbol:?} \
+                         while the current frame is {expected:?}"
+                    );
+                }
+            }
+
+            // Control: the static styles must draw no spinner glyph at all,
+            // otherwise the assertions above could pass for the wrong reason.
+            for style in [
+                crate::config::StatusIndicatorStyle::Dots,
+                crate::config::StatusIndicatorStyle::Symbols,
+            ] {
+                let mut app = build_app(3);
+                app.status_indicators = style;
+                let drawn = spinner_cells(&draw(&app, collapsed));
+                assert!(
+                    drawn.is_empty(),
+                    "{style:?} (collapsed={collapsed}) drew spinner glyphs {drawn:?}"
+                );
+            }
+        }
     }
 
     #[test]

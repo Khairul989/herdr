@@ -70,14 +70,15 @@ fn status_indicator_index(style: StatusIndicatorStyle) -> usize {
     match style {
         StatusIndicatorStyle::Dots => 0,
         StatusIndicatorStyle::Symbols => 1,
+        StatusIndicatorStyle::Animated => 2,
     }
 }
 
 fn status_indicator_for_index(idx: usize) -> StatusIndicatorStyle {
-    if idx == 0 {
-        StatusIndicatorStyle::Dots
-    } else {
-        StatusIndicatorStyle::Symbols
+    match idx {
+        0 => StatusIndicatorStyle::Dots,
+        1 => StatusIndicatorStyle::Symbols,
+        _ => StatusIndicatorStyle::Animated,
     }
 }
 
@@ -648,6 +649,57 @@ mod tests {
         );
         assert_eq!(state.status_indicators, StatusIndicatorStyle::Dots);
         assert_eq!(state.mode, Mode::Settings);
+    }
+
+    #[test]
+    fn status_indicator_index_round_trips_for_every_style() {
+        // The modal highlights a row by index and saves the style at the
+        // selected index. If two styles share an index, choosing one silently
+        // saves the other.
+        let styles = [
+            StatusIndicatorStyle::Dots,
+            StatusIndicatorStyle::Symbols,
+            StatusIndicatorStyle::Animated,
+        ];
+
+        let mut indices: Vec<usize> = styles.iter().map(|s| status_indicator_index(*s)).collect();
+        let unique = {
+            let mut sorted = indices.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            sorted
+        };
+        assert_eq!(unique.len(), styles.len(), "indices must be distinct");
+        assert_eq!(unique, (0..styles.len()).collect::<Vec<_>>());
+
+        indices.clear();
+        for style in styles {
+            let idx = status_indicator_index(style);
+            assert_eq!(
+                status_indicator_for_index(idx),
+                style,
+                "index {idx} must map back to {style:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_indicator_choice_can_select_animated() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Indicators);
+        state.settings.list.selected = status_indicator_index(StatusIndicatorStyle::Animated);
+
+        let action = update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+
+        assert_eq!(
+            action,
+            Some(SettingsAction::SaveStatusIndicators(
+                StatusIndicatorStyle::Animated
+            ))
+        );
     }
 
     #[test]

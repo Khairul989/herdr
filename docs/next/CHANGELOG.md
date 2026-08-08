@@ -8,6 +8,8 @@
 - Panes can now route normal right-click gestures to mouse-reporting applications through the pane menu, `herdr pane input`, `pane.input.set`, or the `pane split --right-click pane` launch option.
 - `theme.custom.sidebar_bg` can now give the desktop sidebar its own background without changing built-in theme defaults.
 - Settings and `ui.status_indicators = "symbols"` can now use distinct static shapes for blocked, working, done, idle, and unknown agent states. (#2260)
+- A new `ui.status_indicators = "animated"` style draws the same distinct shapes but spins the working indicator, so an active agent is visible at a glance. The redraw tick runs only while an agent is working.
+- Bundled a Grok agent logo mask so the sidebar `agent_icon` token can render Grok the same way as other agents with Kitty graphics.
 - The plugin marketplace now discovers valid manifests at repository roots and subdirectories, groups multiple plugins under each repository, and publishes their versions and exact default-branch commits.
 
 ### Changed

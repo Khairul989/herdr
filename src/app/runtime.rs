@@ -7,7 +7,7 @@ use crossterm::terminal;
 
 use super::{
     background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
-    RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL,
+    RESIZE_POLL_INTERVAL, SELECTION_AUTOSCROLL_INTERVAL, SPINNER_FRAME_INTERVAL,
 };
 fn retain_custom_command_after_wait(
     pid: u32,
@@ -289,6 +289,8 @@ impl App {
             self.next_resize_poll = now + RESIZE_POLL_INTERVAL;
         }
 
+        changed |= self.tick_spinner(now);
+
         if self
             .config_diagnostic_deadline
             .is_some_and(|deadline| now >= deadline)
@@ -518,6 +520,40 @@ impl App {
         self.selection_autoscroll_deadline = None;
     }
 
+    /// Drive the animated working-state indicator.
+    ///
+    /// Returns true when the frame advanced and the UI needs a redraw.
+    ///
+    /// The schedule is (re)armed here and nowhere else, so the invariant is
+    /// local: the deadline is `Some` only while the animated style is selected
+    /// AND a drawable pane is working. When either stops being true the
+    /// deadline is cleared, which is what keeps an idle session from waking the
+    /// event loop forever.
+    pub(crate) fn tick_spinner(&mut self, now: Instant) -> bool {
+        if !self.state.status_indicators.is_animated() || !self.state.any_agent_working() {
+            let was_scheduled = self.spinner_deadline.is_some();
+            self.spinner_deadline = None;
+            // Restart the cycle from frame 0 so the next working period always
+            // begins at the same glyph.
+            self.state.spinner_frame = 0;
+            // Only a previously-running spinner leaves a stale glyph on screen.
+            return was_scheduled;
+        }
+
+        let Some(deadline) = self.spinner_deadline else {
+            self.spinner_deadline = Some(now + SPINNER_FRAME_INTERVAL);
+            return false;
+        };
+
+        if now < deadline {
+            return false;
+        }
+
+        self.state.advance_spinner_frame();
+        self.spinner_deadline = Some(now + SPINNER_FRAME_INTERVAL);
+        true
+    }
+
     pub(crate) fn can_render_now(&self, now: Instant) -> bool {
         match self.last_render_at {
             Some(last_render_at) => now.duration_since(last_render_at) >= MIN_RENDER_INTERVAL,
@@ -602,6 +638,7 @@ impl App {
             self.session_save_deadline,
             self.selection_autoscroll_deadline,
             self.selection_highlight_clear_deadline,
+            self.spinner_deadline,
             render_deadline,
         ]
         .into_iter()
@@ -645,6 +682,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::state;
+    use crate::detect::AgentState;
     use crate::workspace::Workspace;
 
     #[test]
@@ -652,6 +690,183 @@ mod tests {
         let interrupted = std::io::Error::new(std::io::ErrorKind::Interrupted, "test interrupt");
 
         assert!(retain_custom_command_after_wait(42, Err(interrupted)));
+    }
+
+    /// Attach a terminal in `state` to `pane_id` so the pane is one the sidebar
+    /// would actually draw.
+    fn attach_terminal(
+        app: &mut super::super::App,
+        pane_id: crate::layout::PaneId,
+        state: AgentState,
+    ) {
+        let ws = &app.state.workspaces[0];
+        let terminal_id = ws.terminal_id(pane_id).unwrap().clone();
+        let mut terminal = crate::terminal::TerminalState::new(terminal_id.clone(), "/tmp".into());
+        terminal.state = state;
+        app.state.terminals.insert(terminal_id, terminal);
+    }
+
+    fn animated_app_with_working_pane() -> super::super::App {
+        let (mut app, pane_id) = test_app_with_pane();
+        app.state.status_indicators = crate::config::StatusIndicatorStyle::Animated;
+        attach_terminal(&mut app, pane_id, AgentState::Working);
+        app
+    }
+
+    /// Null out every other schedulable deadline so `next_loop_deadline` is a
+    /// statement about the spinner alone. Callers pair this with the headless
+    /// variant so the resize poll and git refresh are excluded too.
+    fn clear_unrelated_deadlines(app: &mut super::super::App) {
+        app.config_diagnostic_deadline = None;
+        app.toast_deadline = None;
+        app.copy_feedback_deadline = None;
+        app.next_auto_update_check = None;
+        app.next_agent_manifest_update_check = None;
+        app.agent_metadata_deadline = None;
+        app.pending_agent_resume_deadline = None;
+        app.session_save_deadline = None;
+        app.selection_autoscroll_deadline = None;
+        app.selection_highlight_clear_deadline = None;
+    }
+
+    #[test]
+    fn spinner_is_not_scheduled_when_no_agent_is_working() {
+        // The load-bearing case: an idle session must never arm the spinner
+        // deadline, otherwise the event loop wakes every 100ms forever.
+        let (mut app, pane_id) = test_app_with_pane();
+        app.state.status_indicators = crate::config::StatusIndicatorStyle::Animated;
+        attach_terminal(&mut app, pane_id, AgentState::Idle);
+        clear_unrelated_deadlines(&mut app);
+        let mut now = Instant::now();
+
+        // Tick well past many frame intervals; the schedule must stay empty and
+        // must not contribute a wake-up to the loop.
+        for _ in 0..20 {
+            assert!(!app.tick_spinner(now));
+            assert_eq!(app.spinner_deadline, None);
+            assert_eq!(
+                app.next_headless_loop_deadline_with_git_refresh(now, false, false),
+                None,
+                "an idle session must have no spinner wake-up scheduled"
+            );
+            now += SPINNER_FRAME_INTERVAL;
+        }
+    }
+
+    #[test]
+    fn spinner_is_not_scheduled_for_static_indicator_styles() {
+        for style in [
+            crate::config::StatusIndicatorStyle::Dots,
+            crate::config::StatusIndicatorStyle::Symbols,
+        ] {
+            let (mut app, pane_id) = test_app_with_pane();
+            app.state.status_indicators = style;
+            attach_terminal(&mut app, pane_id, AgentState::Working);
+
+            assert!(!app.tick_spinner(Instant::now()));
+            assert_eq!(app.spinner_deadline, None, "{style:?} must not animate");
+        }
+    }
+
+    #[test]
+    fn spinner_is_not_scheduled_for_an_unattached_working_terminal() {
+        // A terminal not attached to any pane is never drawn, so it must not
+        // keep the animation alive.
+        let (mut app, _pane_id) = test_app_with_pane();
+        app.state.status_indicators = crate::config::StatusIndicatorStyle::Animated;
+        let orphan_id = crate::terminal::TerminalId::alloc();
+        let mut orphan = crate::terminal::TerminalState::new(orphan_id.clone(), "/tmp".into());
+        orphan.state = AgentState::Working;
+        app.state.terminals.insert(orphan_id, orphan);
+
+        assert!(!app.state.any_agent_working());
+        assert!(!app.tick_spinner(Instant::now()));
+        assert_eq!(app.spinner_deadline, None);
+    }
+
+    #[test]
+    fn spinner_arms_then_advances_a_frame_once_due() {
+        let mut app = animated_app_with_working_pane();
+        let now = Instant::now();
+
+        // First pass arms the schedule without advancing.
+        assert!(!app.tick_spinner(now));
+        assert_eq!(app.spinner_deadline, Some(now + SPINNER_FRAME_INTERVAL));
+        assert_eq!(app.state.spinner_frame, 0);
+
+        // Before the deadline nothing changes.
+        assert!(!app.tick_spinner(now + Duration::from_millis(1)));
+        assert_eq!(app.state.spinner_frame, 0);
+
+        // At the deadline the frame advances and the schedule re-arms.
+        let due = now + SPINNER_FRAME_INTERVAL;
+        assert!(app.tick_spinner(due));
+        assert_eq!(app.state.spinner_frame, 1);
+        assert_eq!(app.spinner_deadline, Some(due + SPINNER_FRAME_INTERVAL));
+    }
+
+    #[test]
+    fn spinner_deadline_is_included_in_the_loop_deadline() {
+        let mut app = animated_app_with_working_pane();
+        clear_unrelated_deadlines(&mut app);
+        let now = Instant::now();
+
+        // Nothing else is scheduled, so the loop deadline is the spinner's or
+        // the spinner never reaches the event loop at all.
+        assert_eq!(
+            app.next_headless_loop_deadline_with_git_refresh(now, false, false),
+            None
+        );
+
+        app.tick_spinner(now);
+
+        assert_eq!(app.spinner_deadline, Some(now + SPINNER_FRAME_INTERVAL));
+        assert_eq!(
+            app.next_headless_loop_deadline_with_git_refresh(now, false, false),
+            app.spinner_deadline
+        );
+    }
+
+    #[test]
+    fn spinner_frame_wraps_evenly_through_the_cycle() {
+        let mut app = animated_app_with_working_pane();
+        let mut now = Instant::now();
+        app.tick_spinner(now);
+
+        let frame_count = crate::app::state::SPINNER_FRAME_COUNT;
+        let mut seen = Vec::new();
+        for _ in 0..frame_count {
+            now += SPINNER_FRAME_INTERVAL;
+            assert!(app.tick_spinner(now));
+            seen.push(app.state.spinner_frame);
+        }
+
+        // A full cycle visits every frame exactly once and returns to 0.
+        let mut sorted = seen.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), frame_count as usize);
+        assert_eq!(app.state.spinner_frame, 0);
+    }
+
+    #[test]
+    fn spinner_stops_and_resets_when_work_finishes() {
+        let mut app = animated_app_with_working_pane();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let now = Instant::now();
+        app.tick_spinner(now);
+        assert!(app.tick_spinner(now + SPINNER_FRAME_INTERVAL));
+        assert_eq!(app.state.spinner_frame, 1);
+
+        attach_terminal(&mut app, pane_id, AgentState::Idle);
+
+        // One final redraw clears the stale spinner glyph, then the schedule is
+        // gone and stays gone.
+        assert!(app.tick_spinner(now + SPINNER_FRAME_INTERVAL * 2));
+        assert_eq!(app.spinner_deadline, None);
+        assert_eq!(app.state.spinner_frame, 0);
+        assert!(!app.tick_spinner(now + SPINNER_FRAME_INTERVAL * 3));
+        assert_eq!(app.spinner_deadline, None);
     }
 
     fn test_app_with_pane() -> (super::super::App, crate::layout::PaneId) {

@@ -36,6 +36,9 @@ use std::time::{Duration, Instant};
 const MIN_RENDER_INTERVAL: Duration = Duration::from_millis(16);
 pub(crate) const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 const RESIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Frame interval for the animated working-state indicator. Only scheduled
+/// while the animated indicator style is active and an agent is working.
+pub(crate) const SPINNER_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 const GIT_REMOTE_STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
 const GIT_REPO_DISCOVERY_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
@@ -132,6 +135,9 @@ pub struct App {
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
+    /// Next working-spinner frame. `Some` only while the animated indicator
+    /// style is active and an agent is working; see `App::tick_spinner`.
+    pub(crate) spinner_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pub(crate) detached_custom_command_children: Vec<std::process::Child>,
@@ -618,6 +624,7 @@ impl App {
             sidebar_section_split,
             agent_panel_sort,
             status_indicators: config.ui.status_indicators,
+            spinner_frame: 0,
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
@@ -759,6 +766,7 @@ impl App {
             detached_custom_command_children: Vec::new(),
             selection_autoscroll_deadline: None,
             selection_highlight_clear_deadline: None,
+            spinner_deadline: None,
             persist_pane_history: config.experimental.pane_history,
             last_render_at: None,
             input_leases: input::InputLeaseTable::default(),
