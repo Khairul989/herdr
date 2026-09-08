@@ -348,6 +348,17 @@ status_indicators = "symbols"
 
 The symbols are static, so this option does not enable spinner animation.
 
+To animate the working state instead, choose **animated** in Settings or configure:
+
+```toml
+[ui]
+status_indicators = "animated"
+```
+
+`animated` draws the same distinct symbols as `symbols` for blocked, done, idle, and unknown, and replaces the working symbol with a braille spinner that advances every 100ms. Only the working state animates.
+
+The animation redraws the sidebar while at least one agent is working, and stops entirely once none are. A session with no working agent schedules no extra redraws. If you prefer no motion at all, keep `dots` or `symbols`.
+
 ### Sidebar row layouts
 
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:

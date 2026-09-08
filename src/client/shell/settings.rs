@@ -24,7 +24,11 @@ fn theme_index_in(names: &[&str], name: &str) -> usize {
 }
 
 fn indicator_index(style: crate::config::StatusIndicatorStyle) -> usize {
-    usize::from(style == crate::config::StatusIndicatorStyle::Symbols)
+    match style {
+        crate::config::StatusIndicatorStyle::Dots => 0,
+        crate::config::StatusIndicatorStyle::Symbols => 1,
+        crate::config::StatusIndicatorStyle::Animated => 2,
+    }
 }
 
 fn toast_index(delivery: crate::config::ToastDelivery) -> usize {
@@ -118,7 +122,8 @@ impl ClientShellState {
         match self.overlay.as_ref() {
             Some(ClientShellOverlay::Settings(settings)) => match settings.section {
                 ClientSettingsSection::Theme => filtered_theme_names(&settings.theme_filter).len(),
-                ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
+                ClientSettingsSection::Indicators => 3,
+                ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
             },
@@ -234,10 +239,10 @@ impl ClientShellState {
                 }
             }
             ClientSettingsSection::Indicators => {
-                let style = if selected == 0 {
-                    crate::config::StatusIndicatorStyle::Dots
-                } else {
-                    crate::config::StatusIndicatorStyle::Symbols
+                let style = match selected {
+                    0 => crate::config::StatusIndicatorStyle::Dots,
+                    1 => crate::config::StatusIndicatorStyle::Symbols,
+                    _ => crate::config::StatusIndicatorStyle::Animated,
                 };
                 self.save_settings_edit(
                     crate::config::ConfigEdit::StatusIndicators(style),
@@ -519,6 +524,22 @@ mod tests {
             Some(ClientShellOverlay::Settings(settings)) => settings.selected,
             _ => panic!("settings overlay must be open"),
         }
+    }
+
+    #[test]
+    fn indicator_index_is_distinct_for_every_style() {
+        // The modal highlights a row by index and saves the style at the
+        // selected index. If two styles share an index, choosing one silently
+        // saves the other.
+        let styles = [
+            crate::config::StatusIndicatorStyle::Dots,
+            crate::config::StatusIndicatorStyle::Symbols,
+            crate::config::StatusIndicatorStyle::Animated,
+        ];
+        let mut indices: Vec<usize> = styles.iter().map(|s| indicator_index(*s)).collect();
+        indices.sort_unstable();
+        indices.dedup();
+        assert_eq!(indices, vec![0, 1, 2]);
     }
 
     #[test]

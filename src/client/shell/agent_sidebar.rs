@@ -349,7 +349,11 @@ pub(super) fn render_agent_row(
         .fg(palette.overlay0)
         .add_modifier(Modifier::DIM);
     let icon = (
-        status_icon(row.status, config.status_indicators),
+        status_icon_at_frame(
+            row.status,
+            config.status_indicators,
+            config.status_animation_frame,
+        ),
         Style::default().fg(status_color(row.status, palette)),
     );
     // A logo only actually draws when logos are active AND this agent ships

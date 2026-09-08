@@ -333,7 +333,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # agent_panel_sort = "spaces"
 
 # Agent status indicators: "dots" preserves the compact color marks; "symbols" uses
-# distinct static glyphs for blocked, working, done, idle, and unknown states.
+# distinct static glyphs for blocked, working, done, idle, and unknown states;
+# "animated" matches "symbols" but spins the working glyph while agents are working.
 # status_indicators = "dots"
 
 # Expanded agent rows. Built-ins are state_icon, state_text, machine, workspace, tab,

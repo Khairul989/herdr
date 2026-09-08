@@ -81,6 +81,11 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    /// Current frame index into `WORKING_SPINNER_FRAMES` for
+    /// `StatusIndicatorStyle::Animated`. Client-side presentation state,
+    /// advanced by `tick_status_animation`; never persisted or reloaded from
+    /// config.
+    pub(super) status_animation_frame: u8,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -955,6 +960,10 @@ pub(crate) struct ClientShellState {
     pub(super) pane_scroll_targets: HashMap<String, usize>,
     pub(super) copy_feedback: Option<crate::app::state::CopyFeedback>,
     pub(super) copy_feedback_deadline: Option<std::time::Instant>,
+    /// Deadline for the next `status_animation_frame` advance under
+    /// `StatusIndicatorStyle::Animated`. `None` while idle (style not
+    /// animated, or no agent working) so the timer never wakes for nothing.
+    pub(super) status_animation_deadline: Option<std::time::Instant>,
     pub(super) host_mouse_pixels: Option<crate::input::mouse::HostPixels>,
     pub(super) input_leases: ClientInputLeases,
     pub(super) popup_pending: bool,
@@ -1098,6 +1107,7 @@ impl ClientShellState {
             pane_scroll_targets: HashMap::new(),
             copy_feedback: None,
             copy_feedback_deadline: None,
+            status_animation_deadline: None,
             host_mouse_pixels: None,
             input_leases: ClientInputLeases::default(),
             popup_pending: false,
@@ -1779,6 +1789,36 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)
+    }
+
+    /// Advances `status_animation_frame` on a 100ms cadence while
+    /// `StatusIndicatorStyle::Animated` is selected and at least one visible
+    /// agent is `Working`; a narrow scalar `Vec::iter().any(...)` scan over
+    /// the already-held snapshot, run once per timer tick regardless of pane
+    /// or client count. Returns `false` (no repaint) whenever the style is
+    /// not animated or no agent is working, so an idle session or a
+    /// `Dots`/`Symbols` session schedules no animation-driven redraws.
+    pub(crate) fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
+        let any_working = self.config.status_indicators.is_animated()
+            && self.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .any(|agent| agent.agent_status == crate::api::schema::AgentStatus::Working)
+            });
+        if !any_working {
+            self.status_animation_deadline = None;
+            return false;
+        }
+        let deadline = *self
+            .status_animation_deadline
+            .get_or_insert_with(|| now + std::time::Duration::from_millis(100));
+        if now < deadline {
+            return false;
+        }
+        self.config.status_animation_frame = self.config.status_animation_frame.wrapping_add(1);
+        self.status_animation_deadline = Some(now + std::time::Duration::from_millis(100));
+        true
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {

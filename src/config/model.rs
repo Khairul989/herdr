@@ -114,6 +114,7 @@ pub enum StatusIndicatorStyle {
     #[default]
     Dots,
     Symbols,
+    Animated,
 }
 
 impl StatusIndicatorStyle {
@@ -121,7 +122,14 @@ impl StatusIndicatorStyle {
         match self {
             Self::Dots => "dots",
             Self::Symbols => "symbols",
+            Self::Animated => "animated",
         }
+    }
+
+    /// True when the style animates the working state and therefore needs a
+    /// periodic redraw while any agent is working.
+    pub fn is_animated(self) -> bool {
+        matches!(self, Self::Animated)
     }
 }
 

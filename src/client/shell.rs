@@ -191,9 +191,23 @@ fn pane_surface_topology_signature(surface: &PaneSurfaceFrame) -> u64 {
     hash
 }
 
+/// Spinner frames drawn for `AgentStatus::Working` under
+/// `StatusIndicatorStyle::Animated`. All frames are single-cell braille so the
+/// row layout never shifts between frames.
+pub(in crate::client::shell) const WORKING_SPINNER_FRAMES: [&str; 10] =
+    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 fn status_icon(
     status: crate::api::schema::AgentStatus,
     style: crate::config::StatusIndicatorStyle,
+) -> &'static str {
+    status_icon_at_frame(status, style, 0)
+}
+
+fn status_icon_at_frame(
+    status: crate::api::schema::AgentStatus,
+    style: crate::config::StatusIndicatorStyle,
+    frame: u8,
 ) -> &'static str {
     use crate::api::schema::AgentStatus;
     use crate::config::StatusIndicatorStyle;
@@ -204,11 +218,18 @@ fn status_icon(
         ) => "●",
         (StatusIndicatorStyle::Dots, AgentStatus::Idle) => "○",
         (StatusIndicatorStyle::Dots, AgentStatus::Unknown) => "·",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Blocked) => "×",
+        (StatusIndicatorStyle::Symbols, AgentStatus::Blocked)
+        | (StatusIndicatorStyle::Animated, AgentStatus::Blocked) => "×",
         (StatusIndicatorStyle::Symbols, AgentStatus::Working) => "◐",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Done) => "✓",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Idle) => "○",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Unknown) => "·",
+        (StatusIndicatorStyle::Animated, AgentStatus::Working) => {
+            WORKING_SPINNER_FRAMES[usize::from(frame) % WORKING_SPINNER_FRAMES.len()]
+        }
+        (StatusIndicatorStyle::Symbols, AgentStatus::Done)
+        | (StatusIndicatorStyle::Animated, AgentStatus::Done) => "✓",
+        (StatusIndicatorStyle::Symbols, AgentStatus::Idle)
+        | (StatusIndicatorStyle::Animated, AgentStatus::Idle) => "○",
+        (StatusIndicatorStyle::Symbols, AgentStatus::Unknown)
+        | (StatusIndicatorStyle::Animated, AgentStatus::Unknown) => "·",
     }
 }
 
