@@ -434,21 +434,19 @@ impl ClientShellState {
         }
         // In the Theme section, plain h/l/j/k feed the filter text instead of
         // navigating — only the dedicated nav keys below move sections/selection.
-        if matches!(code, KeyCode::Tab | KeyCode::Right)
-            || (!in_theme_section && code == KeyCode::Char('l'))
+        if (matches!(code, KeyCode::Tab | KeyCode::Right)
+            || (!in_theme_section && code == KeyCode::Char('l')))
+            && modifiers.is_empty()
         {
-            if modifiers.is_empty() {
-                self.move_settings_section(1, outcome);
-                return true;
-            }
+            self.move_settings_section(1, outcome);
+            return true;
         }
-        if matches!(code, KeyCode::BackTab | KeyCode::Left)
-            || (!in_theme_section && code == KeyCode::Char('h'))
+        if (matches!(code, KeyCode::BackTab | KeyCode::Left)
+            || (!in_theme_section && code == KeyCode::Char('h')))
+            && modifiers.difference(KeyModifiers::SHIFT).is_empty()
         {
-            if modifiers.difference(KeyModifiers::SHIFT).is_empty() {
-                self.move_settings_section(-1, outcome);
-                return true;
-            }
+            self.move_settings_section(-1, outcome);
+            return true;
         }
         let move_up = (code == KeyCode::Up && modifiers.is_empty())
             || (in_theme_section

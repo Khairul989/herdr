@@ -315,9 +315,11 @@ pub(crate) fn render_sidebar(
             buffer,
             rect,
             workspace,
-            status,
-            config.status_indicators,
-            config.status_animation_frame,
+            WorkspaceRowStatus {
+                status,
+                indicators: config.status_indicators,
+                frame: config.status_animation_frame,
+            },
             entry,
             rows,
             true,
@@ -623,13 +625,24 @@ pub(in crate::client::shell) fn workspace_rows(
     )
 }
 
+/// The three facts needed to draw a workspace row's agent-status glyph.
+///
+/// Grouped rather than passed separately because `status_frame` only means
+/// anything alongside the style that selects an animated glyph, and because
+/// three more positional parameters push `render_workspace_rows` past the
+/// argument limit.
+pub(in crate::client::shell) struct WorkspaceRowStatus {
+    pub(in crate::client::shell) status: crate::api::schema::AgentStatus,
+    pub(in crate::client::shell) indicators: crate::config::StatusIndicatorStyle,
+    /// Current spinner frame; ignored unless `indicators` is animated.
+    pub(in crate::client::shell) frame: u8,
+}
+
 pub(in crate::client::shell) fn render_workspace_rows(
     buffer: &mut Buffer,
     area: Rect,
     workspace: &ClientShellWorkspace,
-    status: crate::api::schema::AgentStatus,
-    indicators: crate::config::StatusIndicatorStyle,
-    status_frame: u8,
+    row_status: WorkspaceRowStatus,
     entry: &WorkspaceEntry,
     rows: Vec<Vec<crate::ui::ResolvedToken>>,
     endpoint_active: bool,
@@ -637,6 +650,11 @@ pub(in crate::client::shell) fn render_workspace_rows(
     dragged: bool,
     palette: &Palette,
 ) {
+    let WorkspaceRowStatus {
+        status,
+        indicators,
+        frame: status_frame,
+    } = row_status;
     for (row_index, row) in rows.iter().enumerate() {
         let y = area.y + row_index as u16;
         if y >= area.bottom() {
