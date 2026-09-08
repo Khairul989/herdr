@@ -525,27 +525,76 @@ impl Palette {
     }
 
     /// Resolve a theme by name. Returns None for unknown names.
+    ///
+    /// Curated (hand-authored) themes are matched first and always win on
+    /// name collision. Anything else falls back to the generated theme set
+    /// (baked from iTerm2-Color-Schemes), resolved via binary search since
+    /// `generated_themes::GENERATED_THEMES` is sorted ascending by slug.
     pub fn from_name(name: &str) -> Option<Self> {
-        match crate::config::canonical_theme_name(name)? {
-            "catppuccin" => Some(Self::catppuccin()),
-            "catppuccin-latte" => Some(Self::catppuccin_latte()),
-            "terminal" => Some(Self::terminal()),
-            "tokyo-night" => Some(Self::tokyo_night()),
-            "tokyo-night-day" => Some(Self::tokyo_night_day()),
-            "dracula" => Some(Self::dracula()),
-            "nord" => Some(Self::nord()),
-            "gruvbox" => Some(Self::gruvbox()),
-            "gruvbox-light" => Some(Self::gruvbox_light()),
-            "one-dark" => Some(Self::one_dark()),
-            "one-light" => Some(Self::one_light()),
-            "solarized" => Some(Self::solarized()),
-            "solarized-light" => Some(Self::solarized_light()),
-            "kanagawa" => Some(Self::kanagawa()),
-            "kanagawa-lotus" => Some(Self::kanagawa_lotus()),
-            "rose-pine" => Some(Self::rose_pine()),
-            "rose-pine-dawn" => Some(Self::rose_pine_dawn()),
-            "vesper" => Some(Self::vesper()),
-            _ => None,
+        if let Some(canonical) = crate::config::canonical_theme_name(name) {
+            return match canonical {
+                "catppuccin" => Some(Self::catppuccin()),
+                "catppuccin-latte" => Some(Self::catppuccin_latte()),
+                "terminal" => Some(Self::terminal()),
+                "tokyo-night" => Some(Self::tokyo_night()),
+                "tokyo-night-day" => Some(Self::tokyo_night_day()),
+                "dracula" => Some(Self::dracula()),
+                "nord" => Some(Self::nord()),
+                "gruvbox" => Some(Self::gruvbox()),
+                "gruvbox-light" => Some(Self::gruvbox_light()),
+                "one-dark" => Some(Self::one_dark()),
+                "one-light" => Some(Self::one_light()),
+                "solarized" => Some(Self::solarized()),
+                "solarized-light" => Some(Self::solarized_light()),
+                "kanagawa" => Some(Self::kanagawa()),
+                "kanagawa-lotus" => Some(Self::kanagawa_lotus()),
+                "rose-pine" => Some(Self::rose_pine()),
+                "rose-pine-dawn" => Some(Self::rose_pine_dawn()),
+                "vesper" => Some(Self::vesper()),
+                _ => None,
+            };
+        }
+
+        // Fall back to the generated theme set (baked from iTerm2-Color-Schemes).
+        let key = name.to_lowercase().replace([' ', '_'], "-");
+        super::generated_themes::GENERATED_THEMES
+            .binary_search_by_key(&key.as_str(), |theme| theme.slug)
+            .ok()
+            .map(|i| Self::from_generated(&super::generated_themes::GENERATED_THEMES[i]))
+    }
+
+    /// Build a palette from a baked `GeneratedTheme`, mapping each packed
+    /// `0xRRGGBB` color to the matching Palette field in token order.
+    fn from_generated(theme: &super::generated_themes::GeneratedTheme) -> Self {
+        fn rgb(packed: u32) -> Color {
+            Color::Rgb((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)
+        }
+        let c = theme.colors;
+        Self {
+            accent: rgb(c[0]),
+            panel_bg: rgb(c[1]),
+            // Generated themes carry no dedicated sidebar background; match the
+            // built-in themes and leave it to the terminal until overridden.
+            sidebar_bg: Color::Reset,
+            // Generated themes carry no dedicated row backgrounds. surface_dim
+            // (10% toward the anchor) keeps the active row subtle, and surface0
+            // (40%) keeps the navigate cursor distinguishable from it.
+            active_row_bg: rgb(c[4]),
+            selection_bg: rgb(c[2]),
+            surface0: rgb(c[2]),
+            surface1: rgb(c[3]),
+            surface_dim: rgb(c[4]),
+            overlay0: rgb(c[5]),
+            overlay1: rgb(c[6]),
+            text: rgb(c[7]),
+            subtext0: rgb(c[8]),
+            mauve: rgb(c[9]),
+            green: rgb(c[10]),
+            yellow: rgb(c[11]),
+            red: rgb(c[12]),
+            blue: rgb(c[13]),
+            teal: rgb(c[14]),
+            peach: rgb(c[15]),
         }
     }
 
@@ -673,6 +722,31 @@ impl Palette {
         }
         self
     }
+}
+
+/// The full theme picker list: curated `THEME_NAMES` first (featured), then
+/// every generated theme slug. Curated and generated never overlap — Phase 1
+/// excluded collisions when the generated set was baked.
+pub fn all_theme_names() -> Vec<&'static str> {
+    crate::config::THEME_NAMES
+        .iter()
+        .copied()
+        .chain(
+            super::generated_themes::GENERATED_THEMES
+                .iter()
+                .map(|theme| theme.slug),
+        )
+        .collect()
+}
+
+/// Case-insensitive multi-word substring match: every whitespace-separated
+/// word in `query` must appear somewhere in `text`.
+pub(crate) fn text_matches_query(query: &str, text: &str) -> bool {
+    let haystack = text.to_lowercase();
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|needle| haystack.contains(needle))
 }
 
 /// Geometry for the server-rendered active-tab pane surface.
@@ -1500,5 +1574,72 @@ mod tests {
             KeyCode::Char('b'),
             KeyModifiers::SHIFT,
         ));
+    }
+
+    #[test]
+    fn text_matches_query_requires_every_word() {
+        assert!(text_matches_query("tokyo night", "Tokyo Night Storm"));
+        assert!(text_matches_query("NIGHT tokyo", "tokyo night storm"));
+        assert!(!text_matches_query("tokyo submarine", "tokyo night storm"));
+    }
+
+    #[test]
+    fn text_matches_query_empty_query_matches_everything() {
+        assert!(text_matches_query("", "anything"));
+    }
+
+    #[test]
+    fn palette_from_generated_maps_tokens_in_documented_order() {
+        let theme = crate::app::generated_themes::GENERATED_THEMES
+            .iter()
+            .find(|t| t.slug == "0x96f")
+            .expect("0x96f is a baked generated theme");
+        let palette = Palette::from_generated(theme);
+
+        assert_eq!(palette.accent, Color::Rgb(0x00, 0xcd, 0xe8));
+        assert_eq!(palette.panel_bg, Color::Rgb(0x26, 0x24, 0x27));
+        assert_eq!(palette.surface0, Color::Rgb(0x38, 0x37, 0x38));
+        assert_eq!(palette.surface1, Color::Rgb(0x46, 0x46, 0x45));
+        assert_eq!(palette.surface_dim, Color::Rgb(0x2b, 0x29, 0x2b));
+        assert_eq!(palette.overlay0, Color::Rgb(0x71, 0x71, 0x6f));
+        assert_eq!(palette.overlay1, Color::Rgb(0x8d, 0x8d, 0x8b));
+        assert_eq!(palette.text, Color::Rgb(0xfc, 0xfc, 0xfa));
+        assert_eq!(palette.subtext0, Color::Rgb(0xc5, 0xc5, 0xc3));
+        assert_eq!(palette.mauve, Color::Rgb(0xa3, 0x92, 0xe8));
+        assert_eq!(palette.green, Color::Rgb(0xb3, 0xe0, 0x3a));
+        assert_eq!(palette.yellow, Color::Rgb(0xff, 0xc7, 0x39));
+        assert_eq!(palette.red, Color::Rgb(0xff, 0x66, 0x6d));
+        assert_eq!(palette.blue, Color::Rgb(0x00, 0xcd, 0xe8));
+        assert_eq!(palette.teal, Color::Rgb(0x9d, 0xea, 0xf6));
+        assert_eq!(palette.peach, Color::Rgb(0xff, 0x97, 0x53));
+    }
+
+    #[test]
+    fn palette_from_name_falls_back_to_generated_theme() {
+        let expected = Palette::from_generated(
+            crate::app::generated_themes::GENERATED_THEMES
+                .iter()
+                .find(|t| t.slug == "0x96f")
+                .expect("0x96f is a baked generated theme"),
+        );
+        assert_eq!(Palette::from_name("0x96f"), Some(expected));
+        assert_eq!(Palette::from_name("not-a-real-theme"), None);
+    }
+
+    #[test]
+    fn all_theme_names_lists_curated_before_generated() {
+        let names = all_theme_names();
+        assert_eq!(
+            &names[..crate::config::THEME_NAMES.len()],
+            crate::config::THEME_NAMES
+        );
+        assert_eq!(
+            names.len(),
+            crate::config::THEME_NAMES.len() + crate::app::generated_themes::GENERATED_THEMES.len()
+        );
+        assert_eq!(
+            names[crate::config::THEME_NAMES.len()],
+            crate::app::generated_themes::GENERATED_THEMES[0].slug
+        );
     }
 }

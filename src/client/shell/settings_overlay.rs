@@ -129,21 +129,47 @@ pub(super) fn render_settings_overlay(
     let mut choice_hits = Vec::new();
     match settings.section {
         ClientSettingsSection::Theme => {
-            let visible = usize::from(content.height);
+            let filtered = super::super::settings::filtered_theme_names(&settings.theme_filter);
+            let total = crate::app::state::all_theme_names().len();
+            put_text(
+                buffer,
+                content.x,
+                content.y,
+                content.width,
+                &format!(" filter: {}█", settings.theme_filter),
+                Style::default().fg(palette.text).bg(palette.panel_bg),
+            );
+            let count_line = if settings.theme_filter.is_empty() {
+                format!(" {} themes", filtered.len())
+            } else if filtered.is_empty() {
+                " no matching themes".to_owned()
+            } else {
+                format!(" {}/{} themes", filtered.len(), total)
+            };
+            put_text(
+                buffer,
+                content.x,
+                content.y + 1,
+                content.width,
+                &count_line,
+                Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+            );
+            let list = Rect::new(
+                content.x,
+                content.y + 2,
+                content.width,
+                content.height.saturating_sub(2),
+            );
+            let visible = usize::from(list.height);
             let scroll = settings.selected.saturating_sub(visible.saturating_sub(1));
-            for (visible_index, (index, name)) in crate::config::THEME_NAMES
+            for (visible_index, (index, name)) in filtered
                 .iter()
                 .enumerate()
                 .skip(scroll)
                 .take(visible)
                 .enumerate()
             {
-                let rect = Rect::new(
-                    content.x,
-                    content.y + visible_index as u16,
-                    content.width,
-                    1,
-                );
+                let rect = Rect::new(list.x, list.y + visible_index as u16, list.width, 1);
                 draw_choice(
                     buffer,
                     rect,

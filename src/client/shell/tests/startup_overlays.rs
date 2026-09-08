@@ -1153,6 +1153,12 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
     state.handle_input_bytes(b"j");
     assert_ne!(state.config.theme_name, original_theme);
     assert_ne!(state.config.palette.accent, original_palette.accent);
+    // First Esc clears the "j" type-to-filter query rather than closing.
+    state.handle_input_bytes(b"\x1b");
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Settings(_))
+    ));
     state.handle_input_bytes(b"\x1b");
     assert!(state.overlay.is_none());
     assert_eq!(state.config.theme_name, original_theme);

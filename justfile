@@ -98,6 +98,10 @@ plugin-marketplace-test:
 build-libghostty-vt:
     scripts/build_vendored_libghostty_vt.sh
 
+# Regenerate src/app/generated_themes.rs from the vendored Ghostty theme files
+gen-themes dir:
+    cargo run --quiet --bin gen_themes -- {{dir}}
+
 # Check that release docs and changelog have been finalized from docs/next before release
 release-docs-check:
     python3 scripts/agent_detection_manifest_check.py --require-all-published

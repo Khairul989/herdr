@@ -471,6 +471,9 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) selected: usize,
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
+    /// Type-to-filter query for the Theme section, matched case-insensitively
+    /// (multi-word AND substring) against `crate::app::state::all_theme_names()`.
+    pub(super) theme_filter: String,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
     pub(super) integration_messages: Vec<String>,
     pub(super) loading_integrations: bool,
