@@ -427,6 +427,8 @@ pub(crate) fn render_sidebar(
         config,
         state.agent_scroll,
         hits,
+        state.logos_active,
+        state.logo_placements,
     );
 
     hits.sidebar_toggle = Rect::new(
@@ -673,7 +675,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
         } else {
             palette.overlay0
         });
-        let spans = crate::ui::resolved_token_spans(
+        let line = crate::ui::resolved_token_spans(
             row,
             (
                 status_icon(status, indicators),
@@ -687,8 +689,10 @@ pub(in crate::client::shell) fn render_workspace_rows(
             Style::default().fg(palette.overlay1),
             palette,
             area.right().saturating_sub(2).saturating_sub(x) as usize,
+            None,
+            false,
         );
-        Paragraph::new(Line::from(spans)).render(
+        Paragraph::new(Line::from(line.spans)).render(
             Rect::new(x, y, area.right().saturating_sub(2).saturating_sub(x), 1),
             buffer,
         );

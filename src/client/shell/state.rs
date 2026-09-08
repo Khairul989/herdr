@@ -107,6 +107,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
     pub(super) startup_onboarding: bool,
+    pub(super) sidebar_agent_logos: bool,
+    pub(super) kitty_graphics_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

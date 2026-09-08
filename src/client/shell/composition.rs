@@ -35,6 +35,10 @@ impl ClientShellState {
         } else {
             Rect::new(0, 1, cols, rows.saturating_sub(2))
         };
+        // This screen never reaches `compose_graphics`, so any placements
+        // collected here would never be drawn or retired. Force logos off
+        // rather than thread a sink nothing will consume.
+        let mut unavailable_logo_placements = Vec::new();
         super::endpoint_sidebar::render_expanded(
             &mut buffer,
             sidebar,
@@ -56,6 +60,8 @@ impl ClientShellState {
                 selected_workspace_id: self.navigate_workspace_id.as_deref(),
                 dragged_workspace_id: None,
                 workspace_drop_indicator_row: None,
+                logos_active: false,
+                logo_placements: &mut unavailable_logo_placements,
             },
             &mut self.hits,
         );
@@ -133,6 +139,13 @@ impl ClientShellState {
             _ => (None, None),
         };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
+        // Logos are active only when the config flags and terminal both
+        // support them; an unknown cell size means the pixel box a logo would
+        // need to fit cannot be computed, so it stays text-only.
+        let logos_active = self.config.sidebar_agent_logos
+            && self.config.kitty_graphics_enabled
+            && self.graphics_cell_size.is_known();
+        let mut logo_placements = Vec::new();
         self.hits = render::render_shell(
             &mut buffer,
             layout,
@@ -156,6 +169,8 @@ impl ClientShellState {
                     .flatten(),
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                logos_active,
+                logo_placements: &mut logo_placements,
             },
         );
         self.hits.panes = surface
@@ -610,7 +625,7 @@ impl ClientShellState {
             self.hits.pane_splits.clear();
             self.hits.popup = None;
         }
-        self.compose_graphics(&mut frame, layout);
+        self.compose_graphics(&mut frame, layout, logos_active, &logo_placements);
         Some(frame)
     }
 }

@@ -142,6 +142,8 @@ impl ClientShellConfig {
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
             startup_onboarding: false,
+            sidebar_agent_logos: config.ui.sidebar_agent_logos,
+            kitty_graphics_enabled: config.kitty_graphics_enabled(),
         }
     }
 
@@ -324,6 +326,7 @@ impl ClientShellConfig {
                 self.mouse_scroll_lines = ui.mouse_scroll_lines();
                 self.right_click_passthrough_modifiers = ui.right_click_passthrough_modifiers();
                 self.redraw_on_focus_gained = ui.redraw_on_focus_gained;
+                self.sidebar_agent_logos = ui.sidebar_agent_logos;
             }
         }
 
@@ -336,6 +339,9 @@ impl ClientShellConfig {
             self.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
         }
+        // Reads both [terminal] and [experimental], so it is not gated behind
+        // either section's own invalid-section check.
+        self.kitty_graphics_enabled = config.kitty_graphics_enabled();
 
         diagnostics
     }

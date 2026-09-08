@@ -216,6 +216,18 @@ impl ClientState {
             }
         }
     }
+
+    /// Draw sidebar agent-brand logos, appended to (never replacing) whatever
+    /// `encode` produced for pane graphics — logos live in a cache separate
+    /// from pane images/placements, so the two never interfere.
+    pub(crate) fn encode_agent_logos(
+        &mut self,
+        placements: &[crate::ui::agent_logo::AgentLogoPlacement],
+        palette: &crate::app::state::Palette,
+        cell_size: HostCellSize,
+    ) -> Vec<u8> {
+        super::encode_agent_logos(placements, palette, cell_size, &mut self.host)
+    }
 }
 
 pub(crate) fn pane_layer_asset_key(

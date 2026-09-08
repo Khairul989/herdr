@@ -25,6 +25,18 @@ const HOST_IMAGE_ID_BASE: u32 = 10_000;
 #[cfg(test)]
 const PANE_GRAPHICS_IMAGE_ID_BIT: u32 = 1 << 31;
 
+/// Upper bound on a client-reported cell dimension used in logo-box math.
+///
+/// `HostCellSize` is populated from terminal-reported pixel geometry; clamping
+/// it before any multiplication keeps a hostile or corrupted report from
+/// overflowing/wrapping `u32` arithmetic downstream.
+const MAX_LOGO_CELL_PX: u32 = 512;
+/// Render logos at this multiple of the nominal cell box for HiDPI sharpness.
+const LOGO_SUPERSAMPLE: u32 = 2;
+/// First placement id assigned to a logo image; ids increment per occurrence
+/// (one per pane currently running that agent) within a single frame.
+const FIRST_LOGO_PLACEMENT_ID: u32 = 1;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HostCellSize {
     pub width_px: u32,
@@ -113,6 +125,40 @@ pub(crate) struct HostGraphicsCache {
     continuation: Option<(HostSourceKey, u32, usize)>,
     replay_placements: bool,
     replayed_placements: HashSet<(u32, u32)>,
+    /// Agent logos already transmitted to this client, keyed by Kitty image id.
+    ///
+    /// Kept separate from `images`/`placements` (which track pane graphics)
+    /// because logos have a different lifecycle: they are keyed by agent, not
+    /// by pane or source, and are retransmitted on a tint or cell-size change
+    /// rather than on scene diffing. The value fingerprints the pixels that
+    /// were sent (tint plus pixel size), so a theme switch or a font-size
+    /// change retransmits instead of leaving a stale image on screen.
+    logo_images: HashMap<u32, LogoImageSignature>,
+    /// Where each logo placement currently sits, keyed by
+    /// `(image id, placement id)`.
+    ///
+    /// The key needs both halves: several panes can run the same agent, and
+    /// Kitty identifies a placement by that pair. Keying on the image alone
+    /// makes every pane after the first overwrite its predecessor's placement,
+    /// leaving exactly one logo on screen no matter how many panes run it.
+    logo_placements: HashMap<(u32, u32), LogoPlacementSignature>,
+}
+
+/// Identifies the pixels transmitted for a logo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LogoImageSignature {
+    tint: u32,
+    width_px: u32,
+    height_px: u32,
+}
+
+/// Identifies where a logo currently sits on the host screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LogoPlacementSignature {
+    col: u16,
+    row: u16,
+    cols: u16,
+    rows: u16,
 }
 
 static KITTY_GRAPHICS_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -485,10 +531,15 @@ impl HostGraphicsCache {
         for id in self.images.keys().copied().collect::<Vec<_>>() {
             encode_delete_image(&mut bytes, id);
         }
+        for id in self.logo_images.keys().copied().collect::<Vec<_>>() {
+            encode_delete_image(&mut bytes, id);
+        }
         self.images.clear();
         self.placements.clear();
         self.sources.clear();
         self.oversized.clear();
+        self.logo_images.clear();
+        self.logo_placements.clear();
         self.reset_incremental_progress();
         bytes
     }
@@ -763,6 +814,116 @@ fn encode_delete_placement(out: &mut Vec<u8>, host_id: u32, host_placement_id: u
         out,
         "\x1b_Ga=d,d=i,i={host_id},p={host_placement_id},q=2;\x1b\\"
     );
+}
+
+/// Draw sidebar agent-brand logos via Kitty graphics.
+///
+/// Transmits a logo image once per `(agent, tint, pixel size)` combination
+/// and caches it in `cache.logo_images`, so a theme switch or a host
+/// cell-size change retransmits while an unchanged frame does not. Placement
+/// bookkeeping is cheap and re-evaluated every call: each occurrence of an
+/// agent this frame gets its own placement id (Kitty identifies a placement
+/// by the `(image id, placement id)` pair, so several panes running the same
+/// agent each keep their own), repositioned only when its box actually
+/// changed, and any placement key no longer present this frame is retired
+/// with a Kitty delete.
+///
+/// `placements` is expected to already be empty when logos should not be
+/// drawn this frame (disabled, hidden, no Kitty support) — passing an empty
+/// slice here retires every previously drawn logo via the same stale-key
+/// cleanup used for a placement that simply scrolled off screen, rather than
+/// needing a separate teardown path.
+pub(crate) fn encode_agent_logos(
+    placements: &[crate::ui::agent_logo::AgentLogoPlacement],
+    palette: &crate::app::state::Palette,
+    cell_size: HostCellSize,
+    cache: &mut HostGraphicsCache,
+) -> Vec<u8> {
+    use crate::ui::agent_logo::{
+        agent_logo_mask, fit_mask_to_box, logo_image_id, logo_tint, tint_fingerprint, tint_mask,
+        LOGO_COLS,
+    };
+
+    let mut bytes = Vec::new();
+    if !cell_size.is_known() {
+        // No pixel box can be computed without a known cell size; retire
+        // anything already drawn rather than leave a stale logo on screen.
+        for id in cache.logo_images.keys().copied().collect::<Vec<_>>() {
+            encode_delete_image(&mut bytes, id);
+        }
+        cache.logo_images.clear();
+        cache.logo_placements.clear();
+        return bytes;
+    }
+
+    // Clamp a hostile/absurd client-reported cell size before any
+    // multiplication below, to keep u32 arithmetic from overflowing.
+    let cell_w = cell_size.width_px.clamp(1, MAX_LOGO_CELL_PX);
+    let cell_h = cell_size.height_px.clamp(1, MAX_LOGO_CELL_PX);
+    let width_px = cell_w * u32::from(LOGO_COLS) * LOGO_SUPERSAMPLE;
+    let height_px = cell_h * LOGO_SUPERSAMPLE;
+
+    let mut per_image_occurrences: HashMap<u32, u32> = HashMap::new();
+    let mut live_keys: HashSet<(u32, u32)> = HashSet::new();
+
+    for placement in placements {
+        let Some(mask) = agent_logo_mask(placement.agent) else {
+            continue;
+        };
+        let host_id = logo_image_id(placement.agent);
+        let occurrence = per_image_occurrences.entry(host_id).or_insert(0);
+        let placement_id = FIRST_LOGO_PLACEMENT_ID + *occurrence;
+        *occurrence += 1;
+        let key = (host_id, placement_id);
+        live_keys.insert(key);
+
+        let tint = logo_tint(placement.agent, palette);
+        let image_signature = LogoImageSignature {
+            tint: tint_fingerprint(tint),
+            width_px,
+            height_px,
+        };
+        if cache.logo_images.get(&host_id) != Some(&image_signature) {
+            let fitted = fit_mask_to_box(mask, width_px, height_px);
+            let rgba = tint_mask(&fitted, tint);
+            let control = format!("a=t,t=d,f=32,s={width_px},v={height_px},i={host_id},q=2");
+            encode_kitty_data(&mut bytes, &control, &rgba);
+            cache.logo_images.insert(host_id, image_signature);
+            // The host image slot now holds different pixels, so any
+            // placement still referencing the old signature must be redrawn.
+            cache
+                .logo_placements
+                .retain(|(image, _), _| *image != host_id);
+        }
+
+        let placement_signature = LogoPlacementSignature {
+            col: placement.col,
+            row: placement.row,
+            cols: LOGO_COLS,
+            rows: 1,
+        };
+        if cache.logo_placements.get(&key) != Some(&placement_signature) {
+            let _ = write!(bytes, "\x1b[{};{}H", placement.row + 1, placement.col + 1);
+            let _ = write!(
+                bytes,
+                "\x1b_Ga=p,i={host_id},p={placement_id},c={LOGO_COLS},r=1,z=0,C=1,q=2;\x1b\\"
+            );
+            cache.logo_placements.insert(key, placement_signature);
+        }
+    }
+
+    let stale_keys: Vec<(u32, u32)> = cache
+        .logo_placements
+        .keys()
+        .copied()
+        .filter(|key| !live_keys.contains(key))
+        .collect();
+    for key in stale_keys {
+        encode_delete_placement(&mut bytes, key.0, key.1);
+        cache.logo_placements.remove(&key);
+    }
+
+    bytes
 }
 
 fn encode_upload_image(
@@ -1505,5 +1666,186 @@ mod tests {
         )
         .unwrap();
         assert!(framed.len() <= crate::protocol::MAX_GRAPHICS_FRAME_SIZE + 4);
+    }
+
+    mod agent_logos {
+        use super::*;
+        use crate::app::state::Palette;
+        use crate::detect::Agent;
+        use crate::ui::agent_logo::AgentLogoPlacement;
+
+        fn cell(width_px: u32, height_px: u32) -> HostCellSize {
+            HostCellSize {
+                width_px,
+                height_px,
+            }
+        }
+
+        fn placement(agent: Agent, col: u16, row: u16) -> AgentLogoPlacement {
+            AgentLogoPlacement { agent, col, row }
+        }
+
+        #[test]
+        fn several_panes_running_the_same_agent_each_get_their_own_placement() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            let placements = [
+                placement(Agent::Claude, 0, 0),
+                placement(Agent::Claude, 0, 5),
+            ];
+            encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+
+            let image_id = crate::ui::agent_logo::logo_image_id(Agent::Claude);
+            let by_image_alone: HashSet<u32> = cache
+                .logo_placements
+                .keys()
+                .map(|(image, _)| *image)
+                .collect();
+            assert_eq!(
+                by_image_alone.len(),
+                1,
+                "both panes run the same agent, so they share one image id"
+            );
+            // Collapsing the key to the image id alone would make the second
+            // pane's placement overwrite the first's, leaving only one entry.
+            assert_eq!(
+                cache.logo_placements.len(),
+                2,
+                "keying on (image id, placement id) must keep both panes' placements alive"
+            );
+            let mut keys: Vec<(u32, u32)> = cache.logo_placements.keys().copied().collect();
+            keys.sort_unstable();
+            assert_eq!(keys, vec![(image_id, 1), (image_id, 2)]);
+        }
+
+        #[test]
+        fn an_unchanged_frame_emits_nothing() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            let placements = [placement(Agent::Claude, 2, 1)];
+            let first = encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(!first.is_empty(), "first frame must transmit and place");
+            let second = encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(
+                second.is_empty(),
+                "an identical frame must retransmit nothing"
+            );
+        }
+
+        #[test]
+        fn a_theme_change_retransmits_the_image_but_an_unchanged_theme_does_not() {
+            let mut cache = HostGraphicsCache::default();
+            let mut palette = Palette::catppuccin();
+            // OpenCode has no fixed brand color, so its tint tracks the
+            // palette foreground directly and a theme edit actually changes it.
+            let placements = [placement(Agent::OpenCode, 0, 0)];
+            let first = encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(!first.is_empty());
+            let unchanged = encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(
+                unchanged.is_empty(),
+                "an unchanged theme must not retransmit"
+            );
+
+            palette.text = ratatui::style::Color::Rgb(1, 2, 3);
+            let after_theme_change =
+                encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(
+                !after_theme_change.is_empty(),
+                "a theme change must retransmit the image"
+            );
+        }
+
+        #[test]
+        fn a_cell_size_change_retransmits_the_image() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            let placements = [placement(Agent::Claude, 0, 0)];
+            encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            let resized = encode_agent_logos(&placements, &palette, cell(30, 30), &mut cache);
+            assert!(
+                !resized.is_empty(),
+                "a host cell-size change must retransmit at the new pixel size"
+            );
+        }
+
+        #[test]
+        fn unknown_cell_size_deletes_any_cached_logo_instead_of_leaving_it_stray() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            let placements = [placement(Agent::Claude, 0, 0)];
+            encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(!cache.logo_images.is_empty());
+
+            let bytes =
+                encode_agent_logos(&placements, &palette, HostCellSize::default(), &mut cache);
+            assert!(cache.logo_images.is_empty(), "cache must forget the image");
+            assert!(
+                cache.logo_placements.is_empty(),
+                "cache must forget the placement"
+            );
+            assert!(
+                !bytes.is_empty(),
+                "an existing logo must be actively deleted, not merely forgotten"
+            );
+        }
+
+        #[test]
+        fn agents_without_a_bundled_mask_produce_no_placement() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            // Devin has a fixed brand color but ships no bundled mask.
+            let placements = [placement(Agent::Devin, 0, 0)];
+            let bytes = encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert!(bytes.is_empty());
+            assert!(cache.logo_images.is_empty());
+            assert!(cache.logo_placements.is_empty());
+        }
+
+        #[test]
+        fn a_placement_that_disappears_is_retired_but_its_image_is_kept() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            let placements = [placement(Agent::Claude, 0, 0)];
+            encode_agent_logos(&placements, &palette, cell(20, 20), &mut cache);
+            assert_eq!(cache.logo_placements.len(), 1);
+
+            let bytes = encode_agent_logos(&[], &palette, cell(20, 20), &mut cache);
+            assert!(
+                cache.logo_placements.is_empty(),
+                "the stale placement must be retired"
+            );
+            assert!(
+                !bytes.is_empty(),
+                "retiring a placement must actually emit a delete, not just drop it silently"
+            );
+            assert!(
+                !cache.logo_images.is_empty(),
+                "the image stays cached so a pane running the same agent again skips retransmit"
+            );
+        }
+
+        #[test]
+        fn moving_a_placement_repositions_without_retransmitting_the_image() {
+            let mut cache = HostGraphicsCache::default();
+            let palette = Palette::catppuccin();
+            encode_agent_logos(
+                &[placement(Agent::Claude, 0, 0)],
+                &palette,
+                cell(20, 20),
+                &mut cache,
+            );
+            let moved = encode_agent_logos(
+                &[placement(Agent::Claude, 5, 5)],
+                &palette,
+                cell(20, 20),
+                &mut cache,
+            );
+            assert!(!moved.is_empty(), "a moved placement must re-place");
+            assert!(
+                !moved.windows(4).any(|window| window == b"a=t,"),
+                "moving a placement must not retransmit the image bytes"
+            );
+        }
     }
 }

@@ -382,6 +382,8 @@ pub(super) fn render_expanded(
         config,
         state.agent_scroll,
         hits,
+        state.logos_active,
+        state.logo_placements,
     );
     hits.sidebar_toggle = Rect::new(
         area.right().saturating_sub(2),

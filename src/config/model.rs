@@ -901,6 +901,12 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
+    /// Draw agent brand logos in the sidebar as images. Requires a host
+    /// terminal with Kitty graphics support and `terminal.kitty_graphics`
+    /// (or its legacy `experimental.kitty_graphics` alias); falls back to
+    /// the brand-colored agent name anywhere that is unavailable. Default:
+    /// true.
+    pub sidebar_agent_logos: bool,
     pub sidebar_width: u16,
     /// Minimum sidebar width (columns) when expanded. Default: 18.
     pub sidebar_min_width: u16,
@@ -1158,6 +1164,7 @@ impl Default for WorktreesConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
+            sidebar_agent_logos: true,
             sidebar_width: 26,
             sidebar_min_width: 18,
             sidebar_max_width: 36,

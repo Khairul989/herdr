@@ -854,6 +854,12 @@
       "title": "UI and sidebar",
       "keys": [
         {
+          "key": "ui.sidebar_agent_logos",
+          "type": "boolean",
+          "default": "true",
+          "description": "Draw agent brand logos in the sidebar as images when the host terminal supports Kitty graphics and terminal.kitty_graphics (or its legacy experimental.kitty_graphics alias) is enabled. Falls back to the brand-colored agent name anywhere that is unavailable."
+        },
+        {
           "key": "ui.sidebar_width",
           "type": "integer",
           "default": "26",
@@ -1058,7 +1064,7 @@
           "key": "ui.sidebar.agents.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"machine\", \"workspace\", \"tab\"], [\"agent\"]]",
-          "description": "Default expanded Agent sidebar layout. Entries may be token strings or inline { token, fg, bold, dim, rules } style tables. Text-valued built-ins and $name metadata tokens accept up to 16 ordered rules using equals, contains, starts_with, gt, or lt; the first match overrides specified styles. Text conditions optionally accept ignore_case for ASCII matching; numeric conditions require full finite numbers. state_icon accepts fixed styles only. At most 16 rows and 16 tokens per row."
+          "description": "Default expanded Agent sidebar layout. Entries may be token strings or inline { token, fg, bold, dim, rules } style tables. Built-in tokens include agent (brand-colored for recognized agents) and agent_icon (the agent's brand logo image, falling back to the brand-colored name). Text-valued built-ins and $name metadata tokens accept up to 16 ordered rules using equals, contains, starts_with, gt, or lt; the first match overrides specified styles. Text conditions optionally accept ignore_case for ASCII matching; numeric conditions require full finite numbers. state_icon accepts fixed styles only. At most 16 rows and 16 tokens per row."
         },
         {
           "key": "ui.sidebar.agents.rows_by_agent",

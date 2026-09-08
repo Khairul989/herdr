@@ -226,6 +226,12 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) selected_workspace_id: Option<&'a str>,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    /// Whether sidebar agent logos are enabled and drawable this frame
+    /// (config on, kitty graphics on, host cell size known).
+    pub(super) logos_active: bool,
+    /// Sink for absolute-screen `(agent, col, row)` logo placements collected
+    /// while rendering the agent rows this frame.
+    pub(super) logo_placements: &'a mut Vec<crate::ui::agent_logo::AgentLogoPlacement>,
 }
 
 pub(super) fn render_shell(

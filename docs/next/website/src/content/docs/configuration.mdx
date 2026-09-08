@@ -376,7 +376,8 @@ Agent rows accept these built-in tokens:
 - `workspace` — workspace name.
 - `tab` — tab name when available.
 - `pane` — pane name when available.
-- `agent` — detected or reported agent display name.
+- `agent` — detected or reported agent display name. For agents with a recognized brand identity, the name renders in that brand's color.
+- `agent_icon` — the agent's brand logo, drawn as an image when the host terminal supports Kitty graphics and `ui.sidebar_agent_logos` is enabled; falls back to the brand-colored agent name otherwise. Renders nothing extra on a row that already includes `agent`.
 - `terminal_title` — latest OSC 0/2 terminal title after safety normalization.
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
 - `$name` — custom pane metadata named `name`.
@@ -424,6 +425,15 @@ The first matching rule wins. Its specified style fields override the occurrence
 Rules work with text-valued built-ins and custom `$name` tokens in Agent rows, `rows_by_agent` overrides, and Space rows. Custom tokens match their reported value: `$load` reporting `"90"` selects red and bold above, `"60"` selects yellow, and `"90%"` keeps white. Unreported tokens still disappear. `state_icon` and composite `git_status` accept fixed styles only, not rules. Unknown conditions and malformed rules are rejected when loading config; regex, fuzzy matching, and scripts are not supported.
 
 `row_gap` controls the blank terminal rows between entries, independently for the Agent and Space panels. It defaults to `0`, which packs entries together; set it to `1` to restore the previous spacing. It does not add spacing between the content lines declared in `rows`. Consecutive indented worktree children remain packed as one Space group.
+
+Agent names recognized by brand render in that brand's color; agents without a recognized brand keep the default styling. Disable the `agent_icon` token's image rendering (falling back to the brand-colored name everywhere) with:
+
+```toml
+[ui]
+sidebar_agent_logos = false
+```
+
+`sidebar_agent_logos` also requires Kitty graphics support (see [Kitty graphics](#kitty-graphics)) to draw an actual logo image; without it, or for an agent with no bundled logo, `agent_icon` renders as the brand-colored agent name.
 
 Override the complete Agent layout for a known agent under `rows_by_agent`:
 

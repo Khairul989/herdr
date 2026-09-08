@@ -15,6 +15,7 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    pub(super) canonical_agent: Option<crate::detect::Agent>,
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -56,6 +57,8 @@ pub(super) fn render_agent_panel(
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
+    logos_active: bool,
+    logo_placements: &mut Vec<crate::ui::agent_logo::AgentLogoPlacement>,
 ) {
     if !render_agent_panel_header(
         buffer,
@@ -82,7 +85,7 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
-            render_agent_row(buffer, rect, row, config);
+            render_agent_row(buffer, rect, row, config, logos_active, logo_placements);
         },
     );
 }
@@ -306,6 +309,7 @@ pub(super) fn agent_rows(
                 status: agent.agent_status,
                 focused: agent.focused,
                 rows,
+                canonical_agent,
             })
         })
         .collect()
@@ -316,6 +320,8 @@ pub(super) fn render_agent_row(
     rect: Rect,
     row: &AgentRow,
     config: &ClientShellConfig,
+    logos_active: bool,
+    logo_placements: &mut Vec<crate::ui::agent_logo::AgentLogoPlacement>,
 ) {
     let palette = &config.palette;
     let row_style = if row.focused {
@@ -346,6 +352,13 @@ pub(super) fn render_agent_row(
         status_icon(row.status, config.status_indicators),
         Style::default().fg(status_color(row.status, palette)),
     );
+    // A logo only actually draws when logos are active AND this agent ships
+    // a bundled mask — an agent with no mask always falls back to text,
+    // regardless of config/terminal support.
+    let logo_will_render = logos_active
+        && row
+            .canonical_agent
+            .is_some_and(|agent| crate::ui::agent_logo::agent_logo_mask(agent).is_some());
     let rows = if row.rows.is_empty() {
         vec![vec![crate::ui::ResolvedToken {
             kind: crate::ui::ResolvedTokenKind::StateIcon,
@@ -357,7 +370,7 @@ pub(super) fn render_agent_row(
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
         let indent = if index == 0 { 1 } else { 3 };
         let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
-        spans.extend(crate::ui::resolved_token_spans(
+        let line = crate::ui::resolved_token_spans(
             tokens,
             icon,
             status_style,
@@ -366,7 +379,17 @@ pub(super) fn render_agent_row(
             secondary,
             palette,
             rect.width.saturating_sub(indent as u16) as usize,
-        ));
+            row.canonical_agent,
+            logo_will_render,
+        );
+        if let (Some(column), Some(agent)) = (line.logo_column, row.canonical_agent) {
+            logo_placements.push(crate::ui::agent_logo::AgentLogoPlacement {
+                agent,
+                col: rect.x + indent as u16 + column,
+                row: rect.y + index as u16,
+            });
+        }
+        spans.extend(line.spans);
         Paragraph::new(Line::from(spans)).style(row_style).render(
             Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
             buffer,

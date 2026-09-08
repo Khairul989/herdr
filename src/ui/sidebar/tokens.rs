@@ -18,9 +18,18 @@ pub(crate) enum ResolvedTokenKind {
     Tab(String),
     Pane(String),
     Agent(String),
+    /// The agent's brand logo cell. Carries the agent name as `fallback` so
+    /// rendering can fall back to the brand-colored name wherever a Kitty
+    /// logo cannot be drawn (see `agent_logo` module docs).
+    AgentIcon {
+        fallback: String,
+    },
     TerminalTitle(String),
     Branch(String),
-    GitStatus { ahead: usize, behind: usize },
+    GitStatus {
+        ahead: usize,
+        behind: usize,
+    },
     Custom(String),
 }
 
@@ -33,6 +42,7 @@ impl ResolvedTokenKind {
             | Self::Tab(value)
             | Self::Pane(value)
             | Self::Agent(value)
+            | Self::AgentIcon { fallback: value }
             | Self::TerminalTitle(value)
             | Self::Branch(value)
             | Self::Custom(value) => Some(value),
@@ -97,6 +107,13 @@ pub(crate) fn agent_rows(
                         AgentSidebarToken::Agent => context
                             .agent_label
                             .map(|value| ResolvedTokenKind::Agent(value.to_string())),
+                        AgentSidebarToken::AgentIcon => {
+                            context
+                                .agent_label
+                                .map(|value| ResolvedTokenKind::AgentIcon {
+                                    fallback: value.to_string(),
+                                })
+                        }
                         AgentSidebarToken::TerminalTitle => context
                             .terminal_title
                             .map(|value| ResolvedTokenKind::TerminalTitle(value.to_string())),
@@ -283,7 +300,10 @@ rows = [[{ token = "workspace", rules = [{ equals = "long-workspace-name", fg = 
                 theme,
                 &super::super::Palette::catppuccin(),
                 width,
-            );
+                None,
+                false,
+            )
+            .spans;
             assert_eq!(spans.len(), 1);
             assert!(super::super::display_width(&spans[0].content) <= width);
             assert_eq!(spans[0].style.fg, Some(Color::Rgb(255, 0, 0)));

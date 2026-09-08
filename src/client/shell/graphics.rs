@@ -31,7 +31,13 @@ impl ClientShellState {
         };
     }
 
-    pub(super) fn compose_graphics(&mut self, frame: &mut FrameData, layout: ClientShellLayout) {
+    pub(super) fn compose_graphics(
+        &mut self,
+        frame: &mut FrameData,
+        layout: ClientShellLayout,
+        logos_active: bool,
+        logo_placements: &[crate::ui::agent_logo::AgentLogoPlacement],
+    ) {
         let local_cover = self.overlay.is_some()
             || self.mode != ClientShellMode::Terminal
             || self.endpoint_error.is_some()
@@ -61,5 +67,21 @@ impl ClientShellState {
             popup_origin,
             self.graphics_cell_size,
         );
+        // Logos live in the sidebar, never under a pane popup, so only a full
+        // local cover (an overlay, a non-Terminal mode, a toast, an active
+        // selection — the same conditions that hide pane graphics above) hides
+        // them too. Passing an empty slice rather than skipping the call lets
+        // any previously drawn logo placements retire instead of lingering.
+        let visible_placements: &[crate::ui::agent_logo::AgentLogoPlacement] =
+            if logos_active && visibility != crate::kitty_graphics::surface::Visibility::Hidden {
+                logo_placements
+            } else {
+                &[]
+            };
+        frame.graphics.extend(self.graphics.encode_agent_logos(
+            visible_placements,
+            &self.config.palette,
+            self.graphics_cell_size,
+        ));
     }
 }

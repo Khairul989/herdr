@@ -107,6 +107,9 @@ pub struct SidebarTokenStyle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSidebarToken {
     StateIcon,
+    /// The agent's brand logo, drawn as an image when the host terminal
+    /// supports Kitty graphics and as the brand-colored agent name otherwise.
+    AgentIcon,
     StateText,
     Machine,
     Workspace,
@@ -271,6 +274,7 @@ where
 fn agent_token_name(token: &AgentSidebarToken) -> String {
     match token {
         AgentSidebarToken::StateIcon => "state_icon".into(),
+        AgentSidebarToken::AgentIcon => "agent_icon".into(),
         AgentSidebarToken::StateText => "state_text".into(),
         AgentSidebarToken::Machine => "machine".into(),
         AgentSidebarToken::Workspace => "workspace".into(),
@@ -330,6 +334,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
             value,
             &[
                 ("state_icon", Self::StateIcon),
+                ("agent_icon", Self::AgentIcon),
                 ("state_text", Self::StateText),
                 ("machine", Self::Machine),
                 ("workspace", Self::Workspace),
