@@ -10,6 +10,12 @@
 //! Rendering is a two-step Kitty exchange: transmit the tinted image once per
 //! client and then re-place it cheaply on every frame that needs it. The
 //! per-client cache in `kitty_graphics` remembers which step already happened.
+//!
+//! Wiring note: this module is pure logic only. Turning it into an actual
+//! on-screen logo additionally requires two config flags
+//! (`ui.sidebar_agent_logos`, `experimental.kitty_graphics`) to reach the
+//! client-shell render path and a way for the per-frame Kitty scene to learn
+//! the placements this module computes — neither of which this module owns.
 
 use ratatui::style::Color;
 
@@ -27,9 +33,9 @@ pub(crate) const LOGO_COLS: u16 = 2;
 
 /// Kitty image ids reserved for agent logos.
 ///
-/// Pane graphics allocate from [`HOST_IMAGE_ID_BASE`](super::super::kitty_graphics)
-/// (10_000) upward, or with the high bit set for streamed pane graphics, so this
-/// low range cannot collide with them.
+/// Pane graphics allocate from `HOST_IMAGE_ID_BASE` (10_000) upward, or with
+/// the high bit set for streamed pane graphics, so this low range cannot
+/// collide with them.
 pub(crate) const LOGO_IMAGE_ID_BASE: u32 = 1_000;
 
 macro_rules! masks {
@@ -226,6 +232,22 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), total, "logo image ids collide across agents");
+    }
+
+    #[test]
+    fn logo_image_id_is_stable_across_repeated_calls_for_the_same_agent() {
+        // Two panes running the same agent must resolve to the identical
+        // image id so the second pane reuses the first pane's uploaded
+        // texture instead of re-transmitting or evicting it; the id is a
+        // pure function of agent identity, never of call order or count.
+        for agent in Agent::ALL {
+            let first = logo_image_id(agent);
+            let second = logo_image_id(agent);
+            assert_eq!(
+                first, second,
+                "{agent:?} logo id must stay stable across independent panes"
+            );
+        }
     }
 
     #[test]
