@@ -1,3 +1,5 @@
+use std::ops::Not;
+
 use serde::Deserialize;
 use tracing::warn;
 
@@ -21,6 +23,26 @@ pub const THEME_NAMES: &[&str] = &[
     "rose-pine-dawn",
     "vesper",
 ];
+
+/// Slug of a bundled generated theme, if `name` names one.
+///
+/// `GENERATED_THEMES` is sorted ascending by slug, so this binary-searches the
+/// same normalized key `Palette::from_name` uses to resolve it.
+pub(crate) fn generated_theme_slug(name: &str) -> Option<&'static str> {
+    let key = name.to_lowercase().replace([' ', '_'], "-");
+    crate::config::generated_themes::GENERATED_THEMES
+        .binary_search_by_key(&key.as_str(), |theme| theme.slug)
+        .ok()
+        .map(|index| crate::config::generated_themes::GENERATED_THEMES[index].slug)
+}
+
+/// Whether `name` resolves to any theme the app can actually build a palette
+/// for — curated or generated. Validation must accept exactly what
+/// `Palette::from_name` accepts: a name it resolves but this rejects raises a
+/// permanent config diagnostic, and that banner suppresses Kitty graphics.
+pub(crate) fn theme_name_is_known(name: &str) -> bool {
+    canonical_theme_name(name).is_some() || generated_theme_slug(name).is_some()
+}
 
 pub(crate) fn canonical_theme_name(name: &str) -> Option<&'static str> {
     match name.to_lowercase().replace([' ', '_'], "-").as_str() {
@@ -73,7 +95,11 @@ pub struct ThemeConfig {
 
 impl ThemeConfig {
     pub(crate) fn diagnostics(&self) -> Vec<String> {
-        let valid = THEME_NAMES.join(", ");
+        let valid = format!(
+            "{}, and {} more from the bundled catalog",
+            THEME_NAMES.join(", "),
+            crate::config::generated_themes::GENERATED_THEMES.len()
+        );
         [
             ("theme.name", self.name.as_deref(), "catppuccin"),
             ("theme.dark_name", self.dark_name.as_deref(), "catppuccin"),
@@ -86,7 +112,7 @@ impl ThemeConfig {
         .into_iter()
         .filter_map(|(field, value, fallback)| {
             let value = value?;
-            canonical_theme_name(value).is_none().then(|| {
+            theme_name_is_known(value).not().then(|| {
                 format!(
                     "unknown theme name {field} = {value:?}; using {fallback:?}; valid themes: {valid}"
                 )

@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
+pub(crate) mod generated_themes;
 mod io;
 mod keybinds;
 mod model;

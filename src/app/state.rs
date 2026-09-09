@@ -557,15 +557,15 @@ impl Palette {
 
         // Fall back to the generated theme set (baked from iTerm2-Color-Schemes).
         let key = name.to_lowercase().replace([' ', '_'], "-");
-        super::generated_themes::GENERATED_THEMES
+        crate::config::generated_themes::GENERATED_THEMES
             .binary_search_by_key(&key.as_str(), |theme| theme.slug)
             .ok()
-            .map(|i| Self::from_generated(&super::generated_themes::GENERATED_THEMES[i]))
+            .map(|i| Self::from_generated(&crate::config::generated_themes::GENERATED_THEMES[i]))
     }
 
     /// Build a palette from a baked `GeneratedTheme`, mapping each packed
     /// `0xRRGGBB` color to the matching Palette field in token order.
-    fn from_generated(theme: &super::generated_themes::GeneratedTheme) -> Self {
+    fn from_generated(theme: &crate::config::generated_themes::GeneratedTheme) -> Self {
         fn rgb(packed: u32) -> Color {
             Color::Rgb((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)
         }
@@ -732,7 +732,7 @@ pub fn all_theme_names() -> Vec<&'static str> {
         .iter()
         .copied()
         .chain(
-            super::generated_themes::GENERATED_THEMES
+            crate::config::generated_themes::GENERATED_THEMES
                 .iter()
                 .map(|theme| theme.slug),
         )
@@ -1590,7 +1590,7 @@ mod tests {
 
     #[test]
     fn palette_from_generated_maps_tokens_in_documented_order() {
-        let theme = crate::app::generated_themes::GENERATED_THEMES
+        let theme = crate::config::generated_themes::GENERATED_THEMES
             .iter()
             .find(|t| t.slug == "0x96f")
             .expect("0x96f is a baked generated theme");
@@ -1617,13 +1617,38 @@ mod tests {
     #[test]
     fn palette_from_name_falls_back_to_generated_theme() {
         let expected = Palette::from_generated(
-            crate::app::generated_themes::GENERATED_THEMES
+            crate::config::generated_themes::GENERATED_THEMES
                 .iter()
                 .find(|t| t.slug == "0x96f")
                 .expect("0x96f is a baked generated theme"),
         );
         assert_eq!(Palette::from_name("0x96f"), Some(expected));
         assert_eq!(Palette::from_name("not-a-real-theme"), None);
+    }
+
+    #[test]
+    fn every_name_the_picker_offers_passes_config_validation() {
+        // A name `Palette::from_name` resolves but `ThemeConfig::diagnostics`
+        // rejects raises a permanent config-diagnostic banner, and that banner
+        // is a local cover that suppresses every Kitty image — sidebar agent
+        // logos included. The two must agree on the whole picker list.
+        for name in all_theme_names() {
+            assert!(
+                Palette::from_name(name).is_some(),
+                "picker offers {name}, which resolves to no palette"
+            );
+            let config = crate::config::Config {
+                theme: crate::config::ThemeConfig {
+                    name: Some(name.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(
+                config.collect_diagnostics().is_empty(),
+                "picker offers {name}, which config validation rejects"
+            );
+        }
     }
 
     #[test]
@@ -1635,11 +1660,12 @@ mod tests {
         );
         assert_eq!(
             names.len(),
-            crate::config::THEME_NAMES.len() + crate::app::generated_themes::GENERATED_THEMES.len()
+            crate::config::THEME_NAMES.len()
+                + crate::config::generated_themes::GENERATED_THEMES.len()
         );
         assert_eq!(
             names[crate::config::THEME_NAMES.len()],
-            crate::app::generated_themes::GENERATED_THEMES[0].slug
+            crate::config::generated_themes::GENERATED_THEMES[0].slug
         );
     }
 }
