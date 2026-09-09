@@ -1,6 +1,6 @@
 //! Offline generator: derives herdr's 16-token UI palette from the Ghostty
 //! theme files vendored from iTerm2-Color-Schemes, and writes the result to
-//! `src/app/generated_themes.rs`.
+//! `src/config/generated_themes.rs`.
 //!
 //! Run via `just gen-themes [dir]`. See `vendor/ghostty-themes.vendor.json`
 //! for the source pin.
@@ -350,7 +350,7 @@ fn write_output(themes: &[DerivedTheme]) {
     out.push_str("    }\n");
     out.push_str("}\n");
 
-    let out_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/generated_themes.rs");
+    let out_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config/generated_themes.rs");
     fs::write(&out_path, out)
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", out_path.display()));
 }
