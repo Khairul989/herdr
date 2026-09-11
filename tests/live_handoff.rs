@@ -1987,3 +1987,59 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 fn live_handoff_after_restored_failure_rolls_back_old_server() {
     live_handoff_import_failure_rolls_back_old_server_at("after_restored");
 }
+
+/// Guards the cleanup *mechanism* rather than its policy.
+///
+/// The `watchdog_scoping_*` tests in `support` only exercise
+/// `should_terminate_runtime_dir`, a pure decision over a set of paths. A
+/// platform whose process-table lookup silently found *nothing* still passed
+/// them, so the reaper could be completely inert and every test stayed green
+/// while each run leaked its server. This spawns a real server and proves the
+/// reaper can both see it and kill it here.
+#[test]
+fn reaper_discovers_and_terminates_a_real_server_on_this_platform() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = config_home.join("herdr-dev/herdr.sock");
+
+    let spawned = spawn_default_session_server(&config_home, &runtime_dir);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let pid = spawned
+        .child
+        .process_id()
+        .expect("spawned server should have a pid");
+
+    // Discovery must actually see the server. This is the assertion that fails
+    // on a platform where reading the process table is a no-op.
+    let discovered = support::herdr_server_pids_for_runtime_dir(&runtime_dir)
+        .expect("process table should be readable");
+    assert!(
+        discovered.contains(&pid),
+        "reaper failed to discover server pid {pid} for runtime dir {}; discovered {discovered:?}",
+        runtime_dir.display()
+    );
+
+    // Take the harness's own kill paths out of the picture so that the reaper is
+    // the only thing left that can end this process: forget the handle so `Drop`
+    // cannot kill it, and drop it from the pid registry so the atexit hook cannot.
+    unregister_spawned_herdr_pid(Some(pid));
+    std::mem::forget(spawned);
+
+    cleanup_test_base(&base);
+
+    // Checked with a direct signal probe, never by asking discovery again: a
+    // broken lookup reports "no such server" and would rubber-stamp its own bug.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    panic!("reaper left server pid {pid} alive after cleanup_test_base");
+}

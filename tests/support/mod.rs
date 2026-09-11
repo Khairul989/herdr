@@ -69,7 +69,6 @@ pub fn unregister_runtime_dir(path: &Path) {
     }
 }
 
-#[cfg(target_os = "linux")]
 pub fn herdr_server_pids_for_runtime_dir(runtime_dir: &Path) -> std::io::Result<Vec<u32>> {
     let mut pids = Vec::new();
     for pid in iter_worktree_server_pids()? {
@@ -655,6 +654,7 @@ fn terminate_servers_for_runtime_dirs(runtime_dirs: &HashSet<PathBuf>) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
     let own_pid = std::process::id();
     let mut pids = Vec::new();
@@ -684,6 +684,7 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
     Ok(pids)
 }
 
+#[cfg(target_os = "linux")]
 fn is_test_herdr_server_process(pid: u32) -> bool {
     let Some(exe_path) = proc_link_target(pid, "exe") else {
         return false;
@@ -700,10 +701,12 @@ fn is_test_herdr_server_process(pid: u32) -> bool {
     cmdline.iter().any(|arg| arg == "server")
 }
 
+#[cfg(target_os = "linux")]
 fn proc_link_target(pid: u32, link: &str) -> Option<PathBuf> {
     fs::read_link(format!("/proc/{pid}/{link}")).ok()
 }
 
+#[cfg(target_os = "linux")]
 fn read_cmdline(pid: u32) -> std::io::Result<Vec<String>> {
     let cmdline = fs::read(format!("/proc/{pid}/cmdline"))?;
     Ok(cmdline
@@ -713,6 +716,7 @@ fn read_cmdline(pid: u32) -> std::io::Result<Vec<String>> {
         .collect())
 }
 
+#[cfg(target_os = "linux")]
 fn process_runtime_dir(pid: u32) -> std::io::Result<Option<PathBuf>> {
     let environ = fs::read(format!("/proc/{pid}/environ"))?;
 
@@ -729,6 +733,75 @@ fn process_runtime_dir(pid: u32) -> std::io::Result<Option<PathBuf>> {
         }
 
         if let Some(value) = kv.strip_prefix("HERDR_SOCKET_PATH=") {
+            socket_path = Some(PathBuf::from(value));
+        }
+    }
+
+    Ok(socket_path.and_then(|path| path.parent().map(Path::to_path_buf)))
+}
+
+// Non-Linux Unixes have no /proc, so the process table is read through `ps`
+// instead. Without this every reaper below silently finds nothing off Linux and
+// each live-handoff test leaks the replacement server it spawned.
+#[cfg(not(target_os = "linux"))]
+fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
+    let own_pid = std::process::id();
+    let output = std::process::Command::new("ps")
+        .args(["-Ao", "pid=,command="])
+        .output()?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut pids = Vec::new();
+    for line in stdout.lines() {
+        let Some((pid_field, command)) = line.trim_start().split_once(char::is_whitespace) else {
+            continue;
+        };
+        let Ok(pid) = pid_field.parse::<u32>() else {
+            continue;
+        };
+        if pid == own_pid {
+            continue;
+        }
+
+        let mut args = command.split_whitespace();
+        let Some(exe_path) = args.next() else {
+            continue;
+        };
+        if !is_test_herdr_binary(Path::new(exe_path)) {
+            continue;
+        }
+        if args.any(|arg| arg == "server") {
+            pids.push(pid);
+        }
+    }
+
+    pids.sort_unstable();
+    Ok(pids)
+}
+
+// `ps -E` appends the environment to the command column. A value containing a
+// space would split here, but both keys read below are /tmp paths written by the
+// test harness itself.
+#[cfg(not(target_os = "linux"))]
+fn process_runtime_dir(pid: u32) -> std::io::Result<Option<PathBuf>> {
+    let output = std::process::Command::new("ps")
+        .args(["-Ewww", "-o", "command=", "-p"])
+        .arg(pid.to_string())
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut socket_path: Option<PathBuf> = None;
+    for token in stdout.split_whitespace() {
+        if let Some(value) = token.strip_prefix("XDG_RUNTIME_DIR=") {
+            return Ok(Some(PathBuf::from(value)));
+        }
+        if let Some(value) = token.strip_prefix("HERDR_SOCKET_PATH=") {
             socket_path = Some(PathBuf::from(value));
         }
     }
