@@ -263,9 +263,7 @@ pub(crate) fn resolved_token_spans(
             column = column.saturating_add(display_width(separator) as u16);
             spans.push(Span::styled(
                 separator,
-                Style::default()
-                    .fg(palette.overlay0)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(palette.overlay0),
             ));
         }
         match &token.kind {
@@ -413,6 +411,7 @@ fn agent_brand_style(agent: crate::detect::Agent, p: &Palette) -> Option<Style> 
         | Agent::Kimi
         | Agent::Droid
         | Agent::Hermes
+        | Agent::Letta
         | Agent::Kilo
         | Agent::Qodercli
         | Agent::Qwen

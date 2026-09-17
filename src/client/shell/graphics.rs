@@ -35,21 +35,11 @@ impl ClientShellState {
         &mut self,
         frame: &mut FrameData,
         layout: ClientShellLayout,
+        occlusion: &crate::kitty_graphics::surface::Occlusion,
         logos_active: bool,
         logo_placements: &[crate::ui::agent_logo::AgentLogoPlacement],
     ) {
-        let local_cover = self.overlay.is_some()
-            || self.mode != ClientShellMode::Terminal
-            || self.endpoint_error.is_some()
-            || self.config_diagnostic.is_some()
-            || self.visible_endpoint_notice.is_some()
-            || self.visible_notification.is_some()
-            || self.copy_feedback.is_some()
-            || self
-                .selection
-                .as_ref()
-                .is_some_and(|selection| selection.is_visible());
-        let visibility = if local_cover {
+        let visibility = if self.endpoint_error.is_some() {
             crate::kitty_graphics::surface::Visibility::Hidden
         } else if self.hits.popup.is_some() {
             crate::kitty_graphics::surface::Visibility::Popup
@@ -66,14 +56,27 @@ impl ClientShellState {
             (layout.pane_surface.x, layout.pane_surface.y),
             popup_origin,
             self.graphics_cell_size,
+            occlusion,
         );
-        // Logos live in the sidebar, never under a pane popup, so only a full
-        // local cover (an overlay, a non-Terminal mode, a toast, an active
-        // selection — the same conditions that hide pane graphics above) hides
-        // them too. Passing an empty slice rather than skipping the call lets
-        // any previously drawn logo placements retire instead of lingering.
+        // Pane graphics are clipped per placement by `occlusion` above. Logos
+        // live in the sidebar and are not occlusion-tested, so any full local
+        // cover (an overlay, a non-Terminal mode, a toast, an active selection)
+        // hides them wholesale. Passing an empty slice rather than skipping the
+        // call lets any previously drawn logo placements retire instead of
+        // lingering.
+        let local_cover = self.overlay.is_some()
+            || self.mode != ClientShellMode::Terminal
+            || self.endpoint_error.is_some()
+            || self.config_diagnostic.is_some()
+            || self.visible_endpoint_notice.is_some()
+            || self.visible_notification.is_some()
+            || self.copy_feedback.is_some()
+            || self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.is_visible());
         let visible_placements: &[crate::ui::agent_logo::AgentLogoPlacement] =
-            if logos_active && visibility != crate::kitty_graphics::surface::Visibility::Hidden {
+            if logos_active && !local_cover {
                 logo_placements
             } else {
                 &[]
