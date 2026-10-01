@@ -128,6 +128,8 @@ pub(super) struct ShellHitMap {
     pub(super) navigator_popup: Rect,
     pub(super) navigator_search: Rect,
     pub(super) navigator_rows: Vec<(Rect, ClientNavigatorTarget)>,
+    pub(super) navigator_scrollbar: Rect,
+    pub(super) navigator_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) worktree_search: Rect,
     pub(super) worktree_rows: Vec<(Rect, usize)>,
     pub(super) help_popup: Rect,
@@ -201,6 +203,9 @@ pub(super) enum ClientChromeDrag {
         grab_row_offset: u16,
     },
     HelpScrollbar {
+        grab_row_offset: u16,
+    },
+    NavigatorScrollbar {
         grab_row_offset: u16,
     },
     ProductAnnouncementScrollbar {
@@ -343,10 +348,6 @@ pub(super) enum ClientNavigatorTarget {
         endpoint_id: ClientEndpointId,
         workspace_id: String,
     },
-    Tab {
-        endpoint_id: ClientEndpointId,
-        tab_id: String,
-    },
     Pane {
         endpoint_id: ClientEndpointId,
         pane_id: String,
@@ -358,6 +359,8 @@ pub(super) struct ClientNavigatorRow {
     pub(super) depth: u8,
     pub(super) label: String,
     pub(super) meta: String,
+    pub(super) detail: String,
+    pub(super) agent: Option<String>,
     pub(super) status: Option<crate::api::schema::AgentStatus>,
     pub(super) stale: bool,
     pub(super) current: bool,
@@ -371,7 +374,6 @@ pub(super) struct ClientNavigatorOverlay {
     pub(super) selected: Option<ClientNavigatorTarget>,
     pub(super) scroll: usize,
     pub(super) filter: Option<ClientNavigatorFilter>,
-    pub(super) expanded_workspaces: HashSet<(ClientEndpointId, String)>,
 }
 
 #[derive(Debug)]
@@ -542,6 +544,7 @@ pub(super) enum ClientContextMenuTarget {
         is_git: bool,
         is_linked_worktree: bool,
         has_worktree_children: bool,
+        close_group: bool,
         collapsed: bool,
     },
     Tab {
@@ -571,8 +574,16 @@ pub(super) struct ClientContextMenuItem {
 }
 
 #[derive(Debug)]
+pub(super) struct ClientTabCloseConfirmation {
+    pub(super) tab_id: String,
+    pub(super) workspace: WorkspaceNavigationTarget,
+}
+
+#[derive(Debug)]
 pub(super) struct ClientConfirmCloseOverlay {
     pub(super) workspace_id: String,
+    pub(super) close_group: bool,
+    pub(super) tab_target: Option<ClientTabCloseConfirmation>,
     pub(super) title: String,
     pub(super) detail: String,
 }
@@ -720,7 +731,17 @@ pub(crate) enum ClientShellNotificationEffect {
     System {
         title: String,
         body: Option<String>,
+        #[cfg(windows)]
+        target: Option<ClientSystemNotificationTarget>,
     },
+}
+
+#[cfg(windows)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ClientSystemNotificationTarget {
+    pub(crate) endpoint_id: ClientEndpointId,
+    pub(crate) boot_id: String,
+    pub(crate) pane_id: String,
 }
 
 pub(super) struct ClientPendingNotification {
@@ -845,6 +866,7 @@ pub(super) struct ClientCopyModeState {
 }
 
 pub(crate) struct ClientShellState {
+    pub(super) machine_diagnostics: super::machine_diagnostics::MachineDiagnostics,
     pub(super) config: ClientShellConfig,
     pub(super) snapshot: Option<Box<ClientShellSnapshot>>,
     pub(super) active_snapshot_generation: Option<u64>,
@@ -871,6 +893,7 @@ pub(crate) struct ClientShellState {
     pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
+    pub(super) pending_agent_reveal: Option<(ClientEndpointId, String)>,
     pub(super) tab_scroll: usize,
     pub(super) mobile_switcher_scroll: usize,
     pub(super) reveal_focused_workspace: bool,
@@ -887,6 +910,7 @@ pub(crate) struct ClientShellState {
     pub(super) collapsed_endpoints: HashSet<ClientEndpointId>,
     pub(super) mode: ClientShellMode,
     pub(super) navigate_workspace_id: Option<WorkspaceNavigationTarget>,
+    pub(super) pending_workspace_highlight: Option<PendingWorkspaceHighlight>,
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) previous_pane_id: Option<String>,
@@ -1010,13 +1034,14 @@ impl ClientShellState {
                 .extend(saved.collapsed_groups);
         }
         Self {
+            machine_diagnostics: Default::default(),
             config,
             snapshot: None,
             active_snapshot_generation: None,
             pane_surface_generation: None,
             pane_surface: None,
             pending_pane_surface: None,
-            graphics: crate::kitty_graphics::surface::ClientState::default(),
+            graphics: crate::kitty_graphics::surface::ClientState::new(),
             graphics_cell_size: crate::kitty_graphics::HostCellSize {
                 width_px: 1,
                 height_px: 1,
@@ -1037,6 +1062,7 @@ impl ClientShellState {
             remote_collapsed_groups,
             workspace_scroll: 0,
             agent_scroll: 0,
+            pending_agent_reveal: None,
             tab_scroll: 0,
             mobile_switcher_scroll: 0,
             reveal_focused_workspace: true,
@@ -1053,6 +1079,7 @@ impl ClientShellState {
             collapsed_endpoints: HashSet::new(),
             mode: ClientShellMode::Terminal,
             navigate_workspace_id: None,
+            pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
             overlay,
             previous_pane_id: None,
@@ -1244,6 +1271,7 @@ impl ClientShellState {
         self.endpoint_error = None;
         self.endpoint_error_deadline = None;
         self.navigate_workspace_id = None;
+        self.pending_workspace_highlight = None;
         self.overlay = self
             .config
             .startup_onboarding
@@ -1560,6 +1588,7 @@ impl ClientShellState {
             }
         }
         self.snapshot = Some(snapshot);
+        self.reconcile_pending_workspace_highlight();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {
